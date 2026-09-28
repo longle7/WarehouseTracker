@@ -30,6 +30,7 @@ public sealed class DigitalTwinDbContext(DbContextOptions<DigitalTwinDbContext> 
             {
                 t.HasCheckConstraint("CK_Warehouses_Latitude", "[Latitude] BETWEEN -90 AND 90");
                 t.HasCheckConstraint("CK_Warehouses_Longitude", "[Longitude] BETWEEN -180 AND 180");
+                t.HasCheckConstraint("CK_Warehouses_FloorSize", "[FloorWidthM] > 0 AND [FloorDepthM] > 0");
             });
             b.HasData(MetadataSeed.Warehouses);
         });
@@ -42,7 +43,12 @@ public sealed class DigitalTwinDbContext(DbContextOptions<DigitalTwinDbContext> 
             b.Property(s => s.Location).HasMaxLength(200);
             b.Property(s => s.MinTemperatureF).HasPrecision(5, 2);
             b.Property(s => s.MaxTemperatureF).HasPrecision(5, 2);
-            b.ToTable(t => t.HasCheckConstraint("CK_Sensors_TemperatureRange", "[MinTemperatureF] < [MaxTemperatureF]"));
+            b.Property(s => s.UnitType).HasConversion<string>().HasMaxLength(32).IsUnicode(false);
+            b.ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_Sensors_TemperatureRange", "[MinTemperatureF] < [MaxTemperatureF]");
+                t.HasCheckConstraint("CK_Sensors_Position", "[PositionX] >= 0 AND [PositionZ] >= 0");
+            });
             b.HasOne(s => s.Warehouse).WithMany(w => w.Sensors).HasForeignKey(s => s.WarehouseId);
             b.HasData(MetadataSeed.Sensors);
         });

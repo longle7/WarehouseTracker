@@ -45,6 +45,7 @@ flowchart LR
 | Timestream retention policy | Partition **TRUNCATE + MERGE** stored procedure | `telemetry.usp_MaintainReadingPartitions` |
 | Timestream `bin()` / time buckets | `DATE_BUCKET` (SQL Server 2022+) | `SqlReadingQueries` |
 | API Gateway WebSocket routes | **SignalR** hub with groups | `Realtime/TelemetryHub.cs` |
+| IoT TwinMaker (entities, components, scenes) | Scene metadata in SQL Server + **react-three-fiber** 3D view | `GET /warehouses/{id}/scene`, `components/twin/` |
 | Client retry / SDK backoff | **Polly** via `Microsoft.Extensions.Http.Resilience` | `SensorSimulator/Program.cs` |
 
 ## Tradeoffs, and why
@@ -74,6 +75,13 @@ Warehouses and sensors are small, relational and slow-changing.
 - SignalR handles transport negotiation (WebSockets, then SSE, then long polling), reconnection and group routing. With raw API Gateway WebSockets you'd build that yourself on top of connection-ID tables.
 - *Cost:* API Gateway manages connections for you, while SignalR connections live on the API instance. Running more than one instance needs Azure SignalR Service or a Redis backplane, which is a one-line change: `AddAzureSignalR()` / `AddStackExchangeRedis()`.
 
+**IoT TwinMaker → scene metadata + react-three-fiber.**
+The warehouse page opens on a 3D twin of the floor. Walk-in coolers, reach-in fridges and display cases are generated in code from their dimensions. Click a unit, or its label, to see its live stats and a 15-minute sparkline, with a link to its full history.
+- *Scene model:* this mirrors TwinMaker's model. Each sensor is an entity with a unit type (its model) and a position and rotation on the warehouse floor, and `GET /warehouses/{id}/scene` returns the static layout.
+- *Live state:* comes from the same SignalR-fed sensor data as the rest of the dashboard. The status beacon, an alert pulse, the door swinging open and faded offline units all update without extra requests.
+- *Why not TwinMaker itself:* its live data comes through a Lambda data connector running in AWS, which can't reach a local SQL Server. Its viewer also needs Cognito credentials and AWS resources. Its availability to new accounts is unclear (AWS moved related SiteWise features to maintenance in late 2025).
+- *Cost:* no scene composer UI; layouts are edited as data. Models are procedural rather than glTF assets. The scene layout could still be exported to a TwinMaker workspace later, since the entity/component shape matches.
+
 **Push design: server-computed snapshots, not raw readings.**
 - After each ingest (bursts are merged into one broadcast), the broadcaster pushes full warehouse and sensor snapshots built by the same `DashboardService` the GET endpoints use. The status rules exist in exactly one place.
 - A 5s heartbeat keeps pushing when ingestion stops, so sensors flip to *offline* without any new data. Push-on-ingest alone can't show silence.
@@ -102,7 +110,7 @@ src/
     Services/                 DashboardService (read model + sensor status)
     Realtime/                 SignalR hub + live update broadcaster
 clients/
-  SensorDashboard.Client/     React + TypeScript (Vite): Leaflet map, Recharts, TanStack Query, SignalR
+  SensorDashboard.Client/     React + TypeScript (Vite): Leaflet map, 3D twin (react-three-fiber), Recharts, TanStack Query, SignalR
 ```
 
 ## Running locally
@@ -135,6 +143,7 @@ npm run dev
 |---|---|
 | `POST /ingest` | Batch of `SensorReadingDto` (1–1000). Returns `{ received, inserted, duplicates, rejected }`. |
 | `GET /warehouses` | Warehouses with coordinates and sensor, alert and offline counts. |
+| `GET /warehouses/{id}/scene` | Static 3D layout: floor size and each unit's type, position, rotation and dimensions (meters). |
 | `GET /warehouses/{id}/sensors` | Sensors with status (`ok`, `alert`, `offline`, `inactive`) and last reading. |
 | `GET /sensors/{id}/properties?from&to&bucketSeconds` | Bucketed history as property series: `temperature`, `humidity`, `doorOpen`, `anomalies`. Defaults to the last hour at about 300 points. |
 | `WS /hubs/telemetry` | SignalR. Server events: `WarehousesUpdated`, `SensorsUpdated(warehouseId, sensors)`, `ReadingsIngested(sensorId, readings)`. Client methods: `SubscribeWarehouse`/`UnsubscribeWarehouse`, `SubscribeSensor`/`UnsubscribeSensor`. |

@@ -35,6 +35,29 @@ export interface Sensor {
   lastReading: LastReading | null
 }
 
+export type UnitType = 'walkInCooler' | 'reachInFridge' | 'displayCase'
+
+/** One refrigerated unit in a warehouse's 3D scene. Meters; rotation 0 = door faces +Z. */
+export interface SceneUnit {
+  sensorId: string
+  location: string
+  unitType: UnitType
+  x: number
+  z: number
+  rotationDegrees: number
+  width: number
+  depth: number
+  height: number
+}
+
+/** Static digital-twin layout. Live state is joined by sensorId from the sensor list. */
+export interface WarehouseScene {
+  warehouseId: string
+  floorWidth: number
+  floorDepth: number
+  units: SceneUnit[]
+}
+
 export type SensorPropertyName = 'temperature' | 'humidity' | 'doorOpen' | 'anomalies'
 
 export interface PropertyValue {

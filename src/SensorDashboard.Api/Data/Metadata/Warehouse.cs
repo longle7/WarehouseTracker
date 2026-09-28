@@ -12,5 +12,10 @@ public sealed class Warehouse
 
     public double Longitude { get; set; }
 
+    /// <summary>Floor size in meters, for the 3D scene.</summary>
+    public double FloorWidthM { get; set; } = 40;
+
+    public double FloorDepthM { get; set; } = 25;
+
     public List<Sensor> Sensors { get; } = [];
 }

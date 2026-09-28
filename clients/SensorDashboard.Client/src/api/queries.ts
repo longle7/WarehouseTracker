@@ -11,6 +11,7 @@ const FALLBACK_HISTORY_REFETCH_MS = 10_000
 export const queryKeys = {
   warehouses: ['warehouses'] as const,
   sensors: (warehouseId: string) => ['warehouses', warehouseId, 'sensors'] as const,
+  scene: (warehouseId: string) => ['warehouses', warehouseId, 'scene'] as const,
   sensorPropertiesAll: (sensorId: string) => ['sensors', sensorId, 'properties'] as const,
   sensorProperties: (sensorId: string, windowMinutes: number) =>
     ['sensors', sensorId, 'properties', windowMinutes] as const,
@@ -33,6 +34,16 @@ export function useSensors(warehouseId: string) {
     queryKey: queryKeys.sensors(warehouseId),
     queryFn: ({ signal }) => api.sensors(warehouseId, signal),
     refetchInterval: usePollingFallback(FALLBACK_REFETCH_MS),
+  })
+}
+
+/** Static 3D layout: changes only with metadata, so fetch once and keep it. */
+export function useWarehouseScene(warehouseId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.scene(warehouseId),
+    queryFn: ({ signal }) => api.scene(warehouseId, signal),
+    staleTime: Infinity,
+    enabled,
   })
 }
 

@@ -40,13 +40,18 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       .build()
     connectionRef.current = connection
 
-    connection.on('warehousesUpdated', (warehouses: Warehouse[]) =>
-      queryClient.setQueryData(queryKeys.warehouses, warehouses))
-    connection.on('sensorsUpdated', (warehouseId: string, sensors: Sensor[]) =>
-      queryClient.setQueryData(queryKeys.sensors(warehouseId), sensors))
+    // Handlers must return undefined: SignalR treats a returned value as a client result
+    // and logs an error because the server didn't ask for one.
+    connection.on('warehousesUpdated', (warehouses: Warehouse[]) => {
+      queryClient.setQueryData(queryKeys.warehouses, warehouses)
+    })
+    connection.on('sensorsUpdated', (warehouseId: string, sensors: Sensor[]) => {
+      queryClient.setQueryData(queryKeys.sensors(warehouseId), sensors)
+    })
     // History is bucketed server-side, so refetch it rather than appending raw readings.
-    connection.on('readingsIngested', (sensorId: string) =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.sensorPropertiesAll(sensorId) }))
+    connection.on('readingsIngested', (sensorId: string) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sensorPropertiesAll(sensorId) })
+    })
 
     const resubscribe = () => {
       for (const key of subscriptions.current.keys()) {
@@ -83,7 +88,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       retryTimer = setTimeout(() => start(1), RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1])
     })
 
-    start()
+    // Deferred a tick so React StrictMode's dev-only mount/unmount/mount cancels the timer
+    // instead of aborting a real negotiation (which SignalR logs as an error).
+    retryTimer = setTimeout(() => start(), 0)
 
     return () => {
       disposed = true

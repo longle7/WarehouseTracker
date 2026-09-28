@@ -1,3 +1,5 @@
+using IoTDigitalTwin.Contracts.Metadata;
+
 namespace SensorDashboard.Api.Data.Metadata;
 
 public sealed class Sensor
@@ -17,6 +19,17 @@ public sealed class Sensor
 
     /// <summary>Readings from inactive sensors are rejected at ingestion.</summary>
     public bool IsActive { get; set; } = true;
+
+    /// <summary>The refrigerated unit the sensor is mounted in; drives its 3D model.</summary>
+    public UnitType UnitType { get; set; } = UnitType.ReachInFridge;
+
+    /// <summary>Unit center on the warehouse floor, in meters from the floor's corner.</summary>
+    public double PositionX { get; set; }
+
+    public double PositionZ { get; set; }
+
+    /// <summary>Turn about the vertical axis; 0 means the door faces +Z.</summary>
+    public double RotationDegrees { get; set; }
 
     public Warehouse Warehouse { get; set; } = null!;
 }

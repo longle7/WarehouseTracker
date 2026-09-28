@@ -47,6 +47,28 @@ public sealed class DashboardService(
         return warehouse.Sensors.Select(s => ToSensorDto(s, statuses[s.Id])).ToList();
     }
 
+    /// <summary>Static 3D layout for a warehouse; null if it doesn't exist.</summary>
+    public async Task<WarehouseSceneDto?> GetSceneAsync(string warehouseId, CancellationToken cancellationToken)
+    {
+        var warehouse = await db.Warehouses
+            .AsNoTracking()
+            .Include(w => w.Sensors.OrderBy(s => s.Id))
+            .SingleOrDefaultAsync(w => w.Id == warehouseId, cancellationToken);
+
+        return warehouse is null
+            ? null
+            : new WarehouseSceneDto(
+                warehouse.Id,
+                warehouse.FloorWidthM,
+                warehouse.FloorDepthM,
+                warehouse.Sensors.Select(s =>
+                {
+                    var (width, depth, height) = UnitDimensions.For(s.UnitType);
+                    return new SceneUnitDto(
+                        s.Id, s.Location, s.UnitType, s.PositionX, s.PositionZ, s.RotationDegrees, width, depth, height);
+                }).ToList());
+    }
+
     /// <summary>
     /// Every warehouse summary and every warehouse's sensor list, from one metadata load and
     /// one latest-reading query. Used by the live broadcaster; same shapes as the GET endpoints.

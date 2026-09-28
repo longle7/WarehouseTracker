@@ -1,4 +1,4 @@
-import type { Sensor, SensorProperty, Warehouse } from './types'
+import type { Sensor, SensorProperty, Warehouse, WarehouseScene } from './types'
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
@@ -26,6 +26,9 @@ export const api = {
 
   sensors: (warehouseId: string, signal?: AbortSignal) =>
     getJson<Sensor[]>(`/warehouses/${encodeURIComponent(warehouseId)}/sensors`, signal),
+
+  scene: (warehouseId: string, signal?: AbortSignal) =>
+    getJson<WarehouseScene>(`/warehouses/${encodeURIComponent(warehouseId)}/scene`, signal),
 
   sensorProperties: (sensorId: string, range: { from: Date; to?: Date }, signal?: AbortSignal) => {
     const params = new URLSearchParams({ from: range.from.toISOString() })

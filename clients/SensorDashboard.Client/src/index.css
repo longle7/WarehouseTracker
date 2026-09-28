@@ -12,6 +12,13 @@
   --accent: #2a78d6;
   --series-1: #2a78d6;
   --series-1-band: rgba(42, 120, 214, 0.16);
+  --twin-bg: #eef0f2;
+  --twin-floor: #d9dcd6;
+  --twin-grid: #b9bcb4;
+  --twin-wall: #9ea3a8;
+  --twin-unit: #f4f6f8;
+  --twin-unit-muted: #b8bab6;
+  --twin-rack: #6f7a86;
 
   /* Status colors are fixed across themes and always paired with an icon + label. */
   --status-good: #0ca30c;
@@ -40,6 +47,13 @@
     --accent: #3987e5;
     --series-1: #3987e5;
     --series-1-band: rgba(57, 135, 229, 0.22);
+    --twin-bg: #111213;
+    --twin-floor: #2a2b29;
+    --twin-grid: #3c3d3a;
+    --twin-wall: #4a4d52;
+    --twin-unit: #d8dde3;
+    --twin-unit-muted: #5d5f5c;
+    --twin-rack: #56606b;
   }
 }
 
@@ -56,6 +70,13 @@
   --accent: #3987e5;
   --series-1: #3987e5;
   --series-1-band: rgba(57, 135, 229, 0.22);
+  --twin-bg: #111213;
+  --twin-floor: #2a2b29;
+  --twin-grid: #3c3d3a;
+  --twin-wall: #4a4d52;
+  --twin-unit: #d8dde3;
+  --twin-unit-muted: #5d5f5c;
+  --twin-rack: #56606b;
 }
 
 *,
@@ -472,4 +493,207 @@ details summary {
 
 .state.error {
   color: var(--status-critical);
+}
+
+/* Digital twin (3D view) */
+
+.twin-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(280px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .twin-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.twin-canvas {
+  position: relative;
+  height: 560px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--twin-bg);
+}
+
+@media (max-width: 600px) {
+  .twin-canvas {
+    height: 420px;
+  }
+}
+
+.twin-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 8px;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.twin-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.twin-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.twin-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font: 500 12px/1.2 var(--sans);
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  user-select: none;
+}
+
+.twin-label:hover {
+  border-color: var(--accent);
+}
+
+.twin-label.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.twin-label .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.twin-label .icon {
+  font-size: 11px;
+}
+
+.twin-label .value {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.twin-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.twin-panel .card-title {
+  margin-bottom: 0;
+  align-items: flex-start;
+}
+
+.small {
+  font-size: 0.8rem;
+}
+
+.icon-button {
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--hover);
+}
+
+.unit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.unit-list button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  text-align: left;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.unit-list button:hover {
+  background: var(--hover);
+}
+
+.unit-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+  margin: 0;
+}
+
+.unit-stats dt {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.unit-stats dd {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sparkline {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sparkline figcaption {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.chart.tiny {
+  height: 90px;
+}
+
+.button-link {
+  display: inline-block;
+  justify-self: start;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.button-link:hover {
+  text-decoration: none;
+  filter: brightness(1.08);
 }

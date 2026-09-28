@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IoTDigitalTwin.Contracts/IoTDigitalTwin.Contracts.csproj" />
+    <Project Path="src/SensorDashboard.Api/SensorDashboard.Api.csproj" />
+    <Project Path="src/SensorSimulator/SensorSimulator.csproj" />
+  </Folder>
+</Solution>

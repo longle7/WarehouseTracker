@@ -1,6 +1,6 @@
 # IoT Digital Twin: Warehouse Cold-Chain Monitor
 
-A .NET 10 reimplementation of an AWS CDK "digital twin" architecture (API Gateway + Lambda + DynamoDB + Timestream). A simulator streams fridge telemetry from three warehouses. An ASP.NET Core API stores it, splitting relational metadata from time-series readings, and pushes live status to a React dashboard over SignalR.
+A .NET 10 reimplementation of an AWS CDK "digital twin" architecture (API Gateway + Lambda + DynamoDB + Timestream). A simulator streams fridge telemetry from three warehouses. An ASP.NET Core API queues it durably, stores it (relational metadata split from time-series readings, with 1-minute rollups), raises debounced alerts, and pushes live status to a React dashboard with a clickable 3D twin of each warehouse.
 
 ```mermaid
 flowchart LR
@@ -8,26 +8,34 @@ flowchart LR
         SIM["SensorSimulator<br/>(Worker Service)"]
     end
     subgraph API["SensorDashboard.Api (ASP.NET Core)"]
-        ING["POST /ingest"]
-        W["IReadingWriter<br/>(TVP, idempotent)"]
+        ING["POST /ingest<br/>202 or 503 + Retry-After"]
+        P["QueuedIngestProcessor<br/>(dequeue + write, one tx)"]
         Q["GET endpoints<br/>DashboardService"]
-        B["LiveUpdateBroadcaster<br/>(BackgroundService)"]
+        B["LiveUpdateBroadcaster"]
+        AE["AlertEvaluator"]
+        RU["RollupService"]
         HUB["TelemetryHub<br/>(SignalR)"]
-        PM["PartitionMaintenance<br/>(BackgroundService)"]
+        PM["PartitionMaintenance"]
     end
     subgraph SQL["SQL Server"]
-        META[("metadata.*<br/>EF Core")]
+        QU[("ingest.ReadingBatches<br/>+ DeadLetters")]
+        META[("metadata.* / ops.Alerts<br/>EF Core")]
         TS[("telemetry.SensorReadings<br/>daily partitions + columnstore")]
+        R1[("telemetry.SensorReadings1m<br/>1-minute rollups")]
     end
     UI["SensorDashboard.Client<br/>(React + TanStack Query)"]
 
     SIM -- "HTTP + Polly retry/breaker" --> ING
-    ING --> W --> TS
-    ING -. notify .-> B
+    ING --> QU --> P --> TS
+    P -. notify .-> B
+    TS -. dirty minutes .-> RU --> R1
+    TS --> AE --> META
     B --> Q
     Q --> META
     Q --> TS
+    Q --> R1
     B --> HUB -- "WebSocket push" --> UI
+    AE --> HUB
     UI -- "initial load / fallback polling" --> Q
     PM --> TS
 ```
@@ -38,12 +46,15 @@ flowchart LR
 |---|---|---|
 | IoT device / telemetry source | **Worker Service** (`BackgroundService` + `PeriodicTimer`) | `src/SensorSimulator` |
 | API Gateway (REST) | **ASP.NET Core** controllers | `Controllers/` |
-| Lambda: ingest handler | **ASP.NET Core endpoint** → `IReadingWriter` | `IngestController`, `SqlReadingWriter` |
-| Lambda: scheduled / stream jobs | **`BackgroundService`** hosted in the API (Azure Functions is the serverless alternative) | `PartitionMaintenanceService`, `LiveUpdateBroadcaster` |
+| SQS queue + dead-letter queue | **SQL Server queue tables** read with `READPAST` | `Data/Ingestion/SqlReadingQueue.cs`, `Migrations/*_IngestQueue.cs` |
+| SQS-triggered Lambda (ingest) | **`QueuedIngestProcessor`** (`BackgroundService`) → `IReadingWriter` | `Data/Ingestion/`, `SqlReadingWriter` |
+| Lambda: scheduled / stream jobs | **`BackgroundService`** hosted in the API (Azure Functions is the serverless alternative) | `PartitionMaintenanceService`, `LiveUpdateBroadcaster`, `RollupService` |
+| CloudWatch alarms + SNS | **`AlertEvaluator`** (debounced alert lifecycle) + pluggable `IAlertNotificationSink` | `Data/Alerts/` |
 | DynamoDB (metadata) | **SQL Server + EF Core** | `Data/DigitalTwinDbContext.cs` |
 | Timestream (readings) | **SQL Server daily-partitioned table + clustered columnstore** (TimescaleDB is the drop-in alternative) | `Migrations/*_TelemetryStore.cs` |
 | Timestream retention policy | Partition **TRUNCATE + MERGE** stored procedure | `telemetry.usp_MaintainReadingPartitions` |
 | Timestream `bin()` / time buckets | `DATE_BUCKET` (SQL Server 2022+) | `SqlReadingQueries` |
+| Timestream scheduled queries / Timescale continuous aggregates | **1-minute rollup table** refreshed from a dirty-minute list | `RollupService`, `telemetry.usp_RefreshRollups` |
 | API Gateway WebSocket routes | **SignalR** hub with groups | `Realtime/TelemetryHub.cs` |
 | IoT TwinMaker (entities, components, scenes) | Scene metadata in SQL Server + **react-three-fiber** 3D view | `GET /warehouses/{id}/scene`, `components/twin/` |
 | Client retry / SDK backoff | **Polly** via `Microsoft.Extensions.Http.Resilience` | `SensorSimulator/Program.cs` |
@@ -56,8 +67,8 @@ Readings go in a table split into one partition per UTC day, stored as a cluster
   - Time-range queries skip every partition outside the range.
   - Columnstore compresses readings and speeds up aggregation.
   - Retention runs as metadata-only `TRUNCATE`/`MERGE` on whole partitions, never row-by-row `DELETE`.
-- *Cost:* things TimescaleDB does for you have to be built by hand. Partitions are created and aged out by a stored procedure that a `BackgroundService` runs. There are no continuous aggregates, so long-window dashboards aggregate at query time.
-- *Switch trigger:* sustained high ingest, or needing pre-computed rollups. The store is only reached through `IReadingWriter` and `IReadingQueries`, which pass sensor IDs in and never join to metadata. A TimescaleDB (Npgsql) implementation would replace those two classes and leave everything else alone.
+- *Cost:* things TimescaleDB does for you have to be built by hand. Partitions are created and aged out by a stored procedure that a `BackgroundService` runs, and continuous aggregates are replaced by the rollup job below.
+- *Switch trigger:* sustained high ingest, or rollups at several granularities. The store is only reached through `IReadingWriter` and `IReadingQueries`, which pass sensor IDs in and never join to metadata. A TimescaleDB (Npgsql) implementation would replace those two classes and leave everything else alone.
 
 **DynamoDB → SQL Server + EF Core for metadata.**
 Warehouses and sensors are small, relational and slow-changing.
@@ -88,9 +99,33 @@ The warehouse page opens on a 3D twin of the floor. Walk-in coolers, reach-in fr
 - The client writes pushes straight into the TanStack Query cache. If the socket drops, the same queries fall back to polling. After a reconnect they refetch to catch up on anything missed.
 - The broadcaster skips all work when no dashboard is connected.
 
+**SQS → a queue table in SQL Server (no separate broker).**
+`POST /ingest` validates the batch, stores it in `ingest.ReadingBatches` and returns **202**. `QueuedIngestProcessor` does the write.
+- *Exactly-once processing:* the consumer dequeues (`DELETE … OUTPUT` with `READPAST, UPDLOCK`) and inserts the readings **in one transaction**. A batch leaves the queue if and only if its readings are stored. Several consumers can run at once without blocking each other or taking the same batch.
+- *Retries and dead letters:* a failed batch rolls back, then is rescheduled with exponential backoff and jitter (`AvailableAt`). After `MaxAttempts` it moves to `ingest.DeadLetters`, or immediately if its payload is unreadable. `POST /ingest/dead-letters/{id}/replay` puts it back.
+- *Backpressure:* at `MaxQueueDepth` the endpoint returns **503 with `Retry-After`**, which the simulator's Polly pipeline already honors.
+- *Observability:* `GET /ingest/stats` shows queue depth, backlog age, dead letters and processing counters.
+- *Why not RabbitMQ or Service Bus:* no extra infrastructure, and the queue shares a transaction with the data it guards, which a separate broker can't. That's the transactional-outbox idea.
+- *Cost:* polling instead of push delivery (mitigated by an in-process wake-up on enqueue, with a 1s poll for other instances), and throughput is bounded by the database. `Ingestion:Mode = Direct` switches back to synchronous writes.
+
+**Alerts: a lifecycle, not just a status.**
+A sensor's *status* is instantaneous. An *alert* is stored history: `ops.Alerts` rows that open, can be acknowledged, escalate and resolve.
+- *Debounced:* an alert opens only after a condition lasts past its grace period (temperature out of range, door open: 30s each; offline: 20s). The evaluator finds when the current streak began with one set-based query over the readings, so it keeps no in-memory state and survives restarts.
+- *Lifecycle:* critical once any reading is 5°F outside the range, and severity only ratchets up. An unacknowledged critical alert escalates after 5 minutes. Temperature and door alerts resolve only on a good reading, so a sensor that goes offline mid-excursion keeps its alert.
+- *Safe with several instances:* a filtered unique index (`SensorId, Kind WHERE ClosedAt IS NULL`) allows only one active alert per sensor and condition.
+- *Notifications:* go through `IAlertNotificationSink` (logging today; email, Teams or SNS plug in there) and are pushed to dashboards as `AlertsChanged`.
+- *Testing:* the rules are a pure function (`AlertRules`), unit-tested apart from the database.
+
+**Rollups: 1-minute aggregates, refreshed incrementally.**
+`telemetry.SensorReadings1m` stores per-minute sums, counts, minimums and maximums, so minutes re-aggregate exactly into any larger bucket.
+- *Staying current:* the writer marks each minute it touches in `telemetry.RollupDirty`, in the same SQL batch as the insert. `RollupService` recomputes dirty minutes from raw data with a `MERGE` every 10s. Late or replayed readings simply dirty their minute again.
+- *Where it's used:* history requests whose bucket is a whole number of minutes (the 6h and 24h charts) read the rollups. Smaller buckets read raw rows. The `X-History-Source` header says which.
+- *Retention:* rollups are kept for 400 days, well past the 30-day raw retention.
+- *Cost:* rollup-backed charts lag by up to one refresh interval.
+
 **Ingestion is idempotent, so retries are safe.**
 - The simulator retries POSTs through Polly: exponential backoff with jitter, a circuit breaker and timeouts.
-- A retry can deliver a batch the server already stored, so the readings table has a unique index on `(SensorId, Timestamp)` with `IGNORE_DUP_KEY = ON`. Duplicates are counted and dropped instead of failing the batch. Delivery is at-least-once, but each reading is stored once.
+- A retry, or a queue batch reprocessed after an ambiguous commit, can deliver readings the server already stored, so the readings table has a unique index on `(SensorId, Timestamp)` with `IGNORE_DUP_KEY = ON`. Duplicates are counted and dropped instead of failing the batch. Delivery is at-least-once, but each reading is stored once.
 - Unknown or inactive sensors, and readings whose warehouse doesn't match the sensor's, are rejected in the same SQL statement.
 
 **Reads and writes use separate code paths.**
@@ -105,10 +140,17 @@ src/
   IoTDigitalTwin.Contracts/   DTOs shared by simulator and API (SensorReadingDto, WarehouseDto, ...)
   SensorSimulator/            Worker Service: topology, reading generator + anomalies, HTTP publisher
   SensorDashboard.Api/
-    Controllers/              /ingest, /warehouses, /sensors
-    Data/                     EF Core metadata, migrations, telemetry writer/queries, partition maintenance
-    Services/                 DashboardService (read model + sensor status)
+    Controllers/              /ingest, /alerts, /warehouses, /sensors
+    Data/                     EF Core metadata + migrations
+      Ingestion/              queue, consumer, dead letters
+      Alerts/                 rules, evaluator, notification sink
+      Telemetry/              writer, queries, rollups, partition maintenance
+    Services/                 DashboardService (read model + sensor status rules)
     Realtime/                 SignalR hub + live update broadcaster
+tests/
+  SensorSimulator.Tests/      generator, options validation, topology
+  SensorDashboard.Api.Tests/  unit: status/alert rules, range resolution, seed consistency
+                              integration: real SQL Server (throwaway DB), HTTP pipeline, SignalR
 clients/
   SensorDashboard.Client/     React + TypeScript (Vite): Leaflet map, 3D twin (react-three-fiber), Recharts, TanStack Query, SignalR
 ```
@@ -135,18 +177,26 @@ dotnet run --project src/SensorSimulator
 cd clients/SensorDashboard.Client
 npm install
 npm run dev
+
+# Tests. Integration tests create and drop a throwaway database on localhost; set
+# IOT_TEST_SQL to a server connection string to use another SQL Server (e.g. in CI).
+dotnet test
 ```
 
 ## API
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /ingest` | Batch of `SensorReadingDto` (1–1000). Returns `{ received, inserted, duplicates, rejected }`. |
+| `POST /ingest` | Batch of `SensorReadingDto` (1–1000). Queued mode: **202** `{ batchId, received }`, or **503** + `Retry-After` when the backlog is full. Direct mode: 200 `{ received, inserted, duplicates, rejected }`. |
+| `GET /ingest/stats` | Queue depth, oldest backlog age, dead-letter count, processing counters. |
+| `GET /ingest/dead-letters` · `POST /ingest/dead-letters/{id}/replay` | Inspect failed batches; put one back on the queue. |
+| `GET /alerts?state=active\|resolved\|all&warehouseId` | Alerts, most severe and newest first. |
+| `POST /alerts/{id}/acknowledge` | `{ by }`. Idempotent; 409 if already resolved. |
 | `GET /warehouses` | Warehouses with coordinates and sensor, alert and offline counts. |
 | `GET /warehouses/{id}/scene` | Static 3D layout: floor size and each unit's type, position, rotation and dimensions (meters). |
 | `GET /warehouses/{id}/sensors` | Sensors with status (`ok`, `alert`, `offline`, `inactive`) and last reading. |
-| `GET /sensors/{id}/properties?from&to&bucketSeconds` | Bucketed history as property series: `temperature`, `humidity`, `doorOpen`, `anomalies`. Defaults to the last hour at about 300 points. |
-| `WS /hubs/telemetry` | SignalR. Server events: `WarehousesUpdated`, `SensorsUpdated(warehouseId, sensors)`, `ReadingsIngested(sensorId, readings)`. Client methods: `SubscribeWarehouse`/`UnsubscribeWarehouse`, `SubscribeSensor`/`UnsubscribeSensor`. |
+| `GET /sensors/{id}/properties?from&to&bucketSeconds` | Bucketed history as property series: `temperature`, `humidity`, `doorOpen`, `anomalies`. Defaults to the last hour at about 300 points. Whole-minute buckets come from rollups (`X-History-Source: rollup`). |
+| `WS /hubs/telemetry` | SignalR. Server events: `WarehousesUpdated`, `SensorsUpdated(warehouseId, sensors)`, `ReadingsIngested(sensorId, readings)`, `AlertsChanged(alerts)`. Client methods: `SubscribeWarehouse`/`UnsubscribeWarehouse`, `SubscribeSensor`/`UnsubscribeSensor`. |
 
 Sensor status is evaluated in this order:
 1. `inactive`: disabled in metadata.
@@ -154,13 +204,12 @@ Sensor status is evaluated in this order:
 3. `alert`: the latest reading is flagged, or outside the sensor's own safe range.
 4. `ok`: otherwise.
 
-The thresholds live in the `Dashboard` configuration section.
+The thresholds live in the `Dashboard` configuration section. Alert grace periods, escalation and severity live in `Alerts`, queue limits in `Ingestion`, and rollup settings in `Telemetry`.
 
 ## Not yet built (production gaps)
 
-- **Queue-based ingestion** (RabbitMQ or Azure Service Bus) behind `IReadingPublisher`, for backpressure and replay. HTTP was chosen first because it was the fastest to stand up.
-- **Authentication:** device credentials for `/ingest`, user auth for the dashboard and hub.
-- **Automated tests:** unit tests for the generator and status rules, and integration tests against SQL Server with Testcontainers.
-- **SignalR scale-out** (Azure SignalR Service) and containerized deployment.
-- **Pre-computed rollups** for long-window charts, and alert notifications (email or Teams) on status transitions.
+- **Authentication:** device credentials for `/ingest`, user auth (and roles for acknowledging alerts) for the dashboard and hub.
+- **Real notification channels:** email, Teams or SMS behind `IAlertNotificationSink`.
+- **SignalR scale-out** (Azure SignalR Service), containerized deployment, and CI running the test suite against a SQL Server container.
+- **End-to-end browser tests** (Playwright) for the dashboard.
 - **Single topology source:** the simulator still has its own copy of the seed list; it should load warehouses and sensors from the API.

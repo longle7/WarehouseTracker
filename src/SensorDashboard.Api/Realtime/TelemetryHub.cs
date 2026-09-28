@@ -1,3 +1,4 @@
+using IoTDigitalTwin.Contracts.Alerts;
 using IoTDigitalTwin.Contracts.Metadata;
 using IoTDigitalTwin.Contracts.Telemetry;
 using Microsoft.AspNetCore.SignalR;
@@ -18,6 +19,9 @@ public interface ITelemetryClient
 
     /// <summary>Sent to connections subscribed to the sensor, with its newly ingested readings.</summary>
     Task ReadingsIngested(string sensorId, IReadOnlyList<SensorReadingDto> readings);
+
+    /// <summary>Sent to every connection when alerts open, escalate, resolve or are acknowledged.</summary>
+    Task AlertsChanged(IReadOnlyList<AlertDto> alerts);
 }
 
 /// <summary>

@@ -10,6 +10,13 @@ public interface IReadingQueries
     Task<IReadOnlyDictionary<string, LatestReading>> GetLatestAsync(
         IReadOnlyCollection<string> sensorIds, DateTimeOffset since, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// For each sensor, when its current out-of-range and door-open streaks began (null if its
+    /// latest reading is fine), plus its last reading time. Thresholds come from the caller.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, ConditionStreaks>> GetConditionStreaksAsync(
+        IReadOnlyCollection<SensorThresholds> sensors, DateTimeOffset since, CancellationToken cancellationToken);
+
     /// <summary>Readings for one sensor in [from, to), aggregated into fixed-size time buckets.</summary>
     Task<IReadOnlyList<ReadingBucket>> GetHistoryAsync(
         string sensorId, DateTimeOffset from, DateTimeOffset to, TimeSpan bucket, CancellationToken cancellationToken);
@@ -22,6 +29,20 @@ public sealed record LatestReading(
     double Humidity,
     bool DoorOpen,
     bool IsAnomaly);
+
+public sealed record SensorThresholds(string SensorId, decimal MinTemperatureF, decimal MaxTemperatureF);
+
+/// <param name="StreakMin">Lowest temperature during the out-of-range streak.</param>
+/// <param name="StreakMax">Highest temperature during the out-of-range streak.</param>
+public sealed record ConditionStreaks(
+    DateTimeOffset? LastReadingAt,
+    DateTimeOffset? TemperatureOutOfRangeSince,
+    double? StreakMin,
+    double? StreakMax,
+    DateTimeOffset? DoorOpenSince)
+{
+    public static readonly ConditionStreaks None = new(null, null, null, null, null);
+}
 
 public sealed record ReadingBucket(
     DateTimeOffset BucketStart,

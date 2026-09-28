@@ -48,6 +48,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     connection.on('sensorsUpdated', (warehouseId: string, sensors: Sensor[]) => {
       queryClient.setQueryData(queryKeys.sensors(warehouseId), sensors)
     })
+    connection.on('alertsChanged', () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.alertsAll })
+    })
     // History is bucketed server-side, so refetch it rather than appending raw readings.
     connection.on('readingsIngested', (sensorId: string) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.sensorPropertiesAll(sensorId) })

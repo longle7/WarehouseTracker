@@ -7,7 +7,8 @@ namespace SensorDashboard.Api.Data.Telemetry;
 /// <summary>
 /// Sends each batch as a table-valued parameter in one round trip, bypassing EF change
 /// tracking. The unique index on (SensorId, Timestamp) has IGNORE_DUP_KEY = ON, so retried
-/// batches are absorbed by the database instead of raising key violations.
+/// batches are absorbed by the database instead of raising key violations. Touched minutes
+/// are marked dirty for the 1-minute rollups in the same batch.
 /// </summary>
 public sealed class SqlReadingWriter(string connectionString) : IReadingWriter
 {
@@ -24,15 +25,36 @@ public sealed class SqlReadingWriter(string connectionString) : IReadingWriter
         FROM @Readings r
         JOIN metadata.Sensors s ON s.Id = r.SensorId AND s.WarehouseId = r.WarehouseId AND s.IsActive = 1;
 
-        SELECT @valid AS Valid, @@ROWCOUNT AS Inserted;
+        DECLARE @inserted int = @@ROWCOUNT;
+
+        -- Mark touched minutes for RollupService (same batch, so no write goes unrolled).
+        IF @inserted > 0
+            INSERT telemetry.RollupDirty (SensorId, BucketStart)
+            SELECT DISTINCT r.SensorId, DATE_BUCKET(minute, 1, r.[Timestamp])
+            FROM @Readings r
+            JOIN metadata.Sensors s ON s.Id = r.SensorId AND s.WarehouseId = r.WarehouseId AND s.IsActive = 1;
+
+        SELECT @valid AS Valid, @inserted AS Inserted;
         """;
 
     public async Task<IngestResultDto> WriteAsync(IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken)
     {
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync(cancellationToken);
+        return await WriteAsync(connection, null, readings, cancellationToken);
+    }
 
-        await using var command = new SqlCommand(InsertSql, connection);
+    /// <summary>
+    /// Writes on the caller's connection and transaction, so the queue consumer can store a
+    /// batch and remove it from the queue atomically.
+    /// </summary>
+    public static async Task<IngestResultDto> WriteAsync(
+        SqlConnection connection,
+        SqlTransaction? transaction,
+        IReadOnlyList<SensorReadingDto> readings,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(InsertSql, connection, transaction);
         command.Parameters.Add(new SqlParameter("@Readings", SqlDbType.Structured)
         {
             TypeName = "telemetry.SensorReadingTableType",

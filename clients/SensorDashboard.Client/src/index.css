@@ -130,6 +130,49 @@ h2 {
   color: var(--text-primary);
 }
 
+.app-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: 16px;
+}
+
+.app-nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.app-nav a:hover {
+  background: var(--hover);
+  text-decoration: none;
+}
+
+.app-nav a.active {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.app-nav .count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--status-warning);
+  color: #1a1a19;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+  line-height: 20px;
+}
+
+.app-nav .count.critical {
+  background: var(--status-critical);
+  color: #fff;
+}
+
 .app-header .live {
   margin-left: auto;
   display: inline-flex;
@@ -696,4 +739,78 @@ details summary {
 .button-link:hover {
   text-decoration: none;
   filter: brightness(1.08);
+}
+
+/* Alerts */
+
+.ack-as {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.ack-as input {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-primary);
+  width: 180px;
+}
+
+.small-button {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 5px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.small-button:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+
+.small-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.alert-state.open {
+  font-weight: 600;
+}
+
+.alert-state.resolved {
+  color: var(--text-secondary);
+}
+
+.alert-state .escalated {
+  color: var(--status-critical);
+  font-weight: 600;
+}
+
+.unit-alerts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.unit-alerts li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--status-critical);
+  border-radius: 8px;
 }

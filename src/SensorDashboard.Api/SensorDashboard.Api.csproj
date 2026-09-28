@@ -11,6 +11,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="SensorDashboard.Api.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\IoTDigitalTwin.Contracts\IoTDigitalTwin.Contracts.csproj" />
   </ItemGroup>
 

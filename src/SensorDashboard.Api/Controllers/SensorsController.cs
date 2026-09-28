@@ -1,5 +1,6 @@
 using IoTDigitalTwin.Contracts.Telemetry;
 using Microsoft.AspNetCore.Mvc;
+using SensorDashboard.Api.Data.Telemetry;
 using SensorDashboard.Api.Services;
 
 namespace SensorDashboard.Api.Controllers;
@@ -29,6 +30,9 @@ public sealed class SensorsController(DashboardService dashboard) : ControllerBa
             ModelState.AddModelError("range", error!);
             return ValidationProblem(ModelState);
         }
+
+        // Which store served the history: "rollup" (1-minute aggregates) or "raw".
+        Response.Headers["X-History-Source"] = SqlReadingQueries.UsesRollups(range.Bucket) ? "rollup" : "raw";
 
         return await dashboard.GetPropertiesAsync(sensorId, range, cancellationToken) is { } properties
             ? Ok(properties)

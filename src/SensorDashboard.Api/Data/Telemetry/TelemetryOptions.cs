@@ -11,4 +11,10 @@ public sealed class TelemetryOptions
     public int RetentionDays { get; set; } = 30;
 
     public TimeSpan MaintenanceInterval { get; set; } = TimeSpan.FromHours(6);
+
+    /// <summary>How often dirty minutes are rolled up; also the freshness lag of rollup-backed charts.</summary>
+    public TimeSpan RollupRefreshInterval { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>1-minute rollups outlive raw readings, so long-range history keeps working.</summary>
+    public int RollupRetentionDays { get; set; } = 400;
 }

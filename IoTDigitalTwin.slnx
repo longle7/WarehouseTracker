@@ -4,4 +4,8 @@
     <Project Path="src/SensorDashboard.Api/SensorDashboard.Api.csproj" />
     <Project Path="src/SensorSimulator/SensorSimulator.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SensorDashboard.Api.Tests/SensorDashboard.Api.Tests.csproj" />
+    <Project Path="tests/SensorSimulator.Tests/SensorSimulator.Tests.csproj" />
+  </Folder>
 </Solution>

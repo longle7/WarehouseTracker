@@ -18,14 +18,6 @@ public sealed class DashboardService(
     IOptions<DashboardOptions> options,
     TimeProvider timeProvider)
 {
-    // Bucket sizes a chart axis reads naturally.
-    private static readonly TimeSpan[] NiceBuckets =
-    [
-        .. new[] { 1, 5, 10, 15, 30 }.Select(s => TimeSpan.FromSeconds(s)),
-        .. new[] { 1, 5, 10, 15, 30 }.Select(m => TimeSpan.FromMinutes(m)),
-        .. new[] { 1, 3, 6, 12, 24 }.Select(h => TimeSpan.FromHours(h)),
-    ];
-
     private DashboardOptions Options => options.Value;
 
     public async Task<IReadOnlyList<WarehouseDto>> GetWarehousesAsync(CancellationToken cancellationToken) =>
@@ -131,29 +123,8 @@ public sealed class DashboardService(
         ];
     }
 
-    /// <summary>
-    /// Fills in defaults and validates a history request. Returns an error message instead of
-    /// a range when the request is invalid.
-    /// </summary>
-    public (HistoryRange? Range, string? Error) ResolveRange(DateTimeOffset? from, DateTimeOffset? to, int? bucketSeconds)
-    {
-        var end = to ?? timeProvider.GetUtcNow();
-        var start = from ?? end - Options.DefaultHistoryWindow;
-        var window = end - start;
-
-        if (window <= TimeSpan.Zero)
-            return (null, "'from' must be earlier than 'to'.");
-        if (window > Options.MaxHistoryWindow)
-            return (null, $"The range can't exceed {Options.MaxHistoryWindow.TotalDays:0} days.");
-        if (bucketSeconds is < 1 or > 86_400)
-            return (null, "'bucketSeconds' must be between 1 and 86400.");
-
-        var bucket = bucketSeconds is { } s
-            ? TimeSpan.FromSeconds(s)
-            : NiceBuckets.FirstOrDefault(b => window / b <= Options.TargetHistoryPoints, NiceBuckets[^1]);
-
-        return (new HistoryRange(start, end, bucket), null);
-    }
+    public (HistoryRange? Range, string? Error) ResolveRange(DateTimeOffset? from, DateTimeOffset? to, int? bucketSeconds) =>
+        HistoryRangeResolver.Resolve(from, to, bucketSeconds, timeProvider.GetUtcNow(), Options);
 
     private async Task<Dictionary<string, (SensorStatus Status, LatestReading? Last)>> GetStatusesAsync(
         IReadOnlyCollection<Sensor> sensors, CancellationToken cancellationToken)
@@ -165,22 +136,10 @@ public sealed class DashboardService(
         return sensors.ToDictionary(s => s.Id, s =>
         {
             var last = latest.GetValueOrDefault(s.Id);
-            return (Evaluate(s, last, now), last);
+            return (SensorStatusRules.Evaluate(s, last, now, Options.OfflineAfter), last);
         });
     }
-
-    private SensorStatus Evaluate(Sensor sensor, LatestReading? last, DateTimeOffset now) => sensor switch
-    {
-        { IsActive: false } => SensorStatus.Inactive,
-        _ when last is null || now - last.Timestamp > Options.OfflineAfter => SensorStatus.Offline,
-        _ when last.IsAnomaly
-            || last.Temperature < (double)sensor.MinTemperatureF
-            || last.Temperature > (double)sensor.MaxTemperatureF => SensorStatus.Alert,
-        _ => SensorStatus.Ok,
-    };
 }
-
-public sealed record HistoryRange(DateTimeOffset From, DateTimeOffset To, TimeSpan Bucket);
 
 public sealed record DashboardSnapshot(
     IReadOnlyList<WarehouseDto> Warehouses,

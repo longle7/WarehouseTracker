@@ -1,0 +1,68 @@
+using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
+using SensorDashboard.Api.Data;
+
+namespace SensorDashboard.Api.Tests.Integration;
+
+/// <summary>
+/// A throwaway database on a real SQL Server, built by the app's own migrations and dropped
+/// afterwards. Uses the local default instance with Windows auth unless IOT_TEST_SQL gives a
+/// server connection string (e.g. a CI container). Partitioning, columnstore and DATE_BUCKET
+/// rule out an in-memory provider.
+/// </summary>
+public sealed class SqlServerFixture : IAsyncLifetime
+{
+    public string ConnectionString { get; }
+
+    public SqlServerFixture()
+    {
+        var server = Environment.GetEnvironmentVariable("IOT_TEST_SQL")
+            ?? "Server=localhost;Trusted_Connection=True;TrustServerCertificate=True";
+        ConnectionString = new SqlConnectionStringBuilder(server)
+        {
+            InitialCatalog = $"IoTDigitalTwin_Test_{Guid.NewGuid():N}",
+        }.ConnectionString;
+    }
+
+    public DigitalTwinDbContext CreateDbContext() =>
+        new(new DbContextOptionsBuilder<DigitalTwinDbContext>().UseSqlServer(ConnectionString).Options);
+
+    public async Task InitializeAsync()
+    {
+        await using var db = CreateDbContext();
+        await db.Database.MigrateAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        SqlConnection.ClearAllPools();
+        await using var db = CreateDbContext();
+        await db.Database.EnsureDeletedAsync();
+    }
+
+    /// <summary>Clears readings and rollups so a test starts from an empty telemetry store.</summary>
+    public Task ResetTelemetryAsync() => ExecuteAsync(
+        "TRUNCATE TABLE telemetry.SensorReadings; TRUNCATE TABLE telemetry.SensorReadings1m; TRUNCATE TABLE telemetry.RollupDirty;");
+
+    public async Task ExecuteAsync(string sql)
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<T> ScalarAsync<T>(string sql)
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(sql, connection);
+        return (T)(await command.ExecuteScalarAsync())!;
+    }
+}
+
+[CollectionDefinition(Name)]
+public sealed class SqlServerCollection : ICollectionFixture<SqlServerFixture>
+{
+    public const string Name = "SQL Server";
+}

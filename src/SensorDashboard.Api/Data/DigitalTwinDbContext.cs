@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SensorDashboard.Api.Data.Alerts;
 using SensorDashboard.Api.Data.Metadata;
 
 namespace SensorDashboard.Api.Data;
@@ -16,6 +17,8 @@ public sealed class DigitalTwinDbContext(DbContextOptions<DigitalTwinDbContext> 
     public DbSet<Warehouse> Warehouses => Set<Warehouse>();
 
     public DbSet<Sensor> Sensors => Set<Sensor>();
+
+    public DbSet<Alert> Alerts => Set<Alert>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -51,6 +54,25 @@ public sealed class DigitalTwinDbContext(DbContextOptions<DigitalTwinDbContext> 
             });
             b.HasOne(s => s.Warehouse).WithMany(w => w.Sensors).HasForeignKey(s => s.WarehouseId);
             b.HasData(MetadataSeed.Sensors);
+        });
+
+        // Operational history, not metadata: its own schema.
+        modelBuilder.Entity<Alert>(b =>
+        {
+            b.ToTable("Alerts", "ops");
+            b.Property(a => a.SensorId).HasMaxLength(IdMaxLength).IsUnicode(false);
+            b.Property(a => a.WarehouseId).HasMaxLength(IdMaxLength).IsUnicode(false);
+            b.Property(a => a.Kind).HasConversion<string>().HasMaxLength(32).IsUnicode(false);
+            b.Property(a => a.Severity).HasConversion<string>().HasMaxLength(16).IsUnicode(false);
+            b.Property(a => a.AcknowledgedBy).HasMaxLength(100);
+            b.Property(a => a.Message).HasMaxLength(500);
+            b.Ignore(a => a.State);
+            b.HasOne(a => a.Sensor).WithMany().HasForeignKey(a => a.SensorId);
+
+            // At most one active alert per sensor and condition, even with several evaluators.
+            b.HasIndex(a => new { a.SensorId, a.Kind }).IsUnique().HasFilter("[ClosedAt] IS NULL")
+                .HasDatabaseName("UX_Alerts_Active");
+            b.HasIndex(a => new { a.WarehouseId, a.OpenedAt });
         });
     }
 }

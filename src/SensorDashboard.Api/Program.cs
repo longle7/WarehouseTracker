@@ -3,6 +3,8 @@ using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SensorDashboard.Api.Data;
+using SensorDashboard.Api.Data.Alerts;
+using SensorDashboard.Api.Data.Ingestion;
 using SensorDashboard.Api.Data.Telemetry;
 using SensorDashboard.Api.Realtime;
 using SensorDashboard.Api.Services;
@@ -32,6 +34,24 @@ builder.Services.AddHostedService(sp => new PartitionMaintenanceService(
     sp.GetRequiredService<IOptions<TelemetryOptions>>(),
     sp.GetRequiredService<TimeProvider>(),
     sp.GetRequiredService<ILogger<PartitionMaintenanceService>>()));
+builder.Services.AddHostedService(sp => new RollupService(
+    connectionString,
+    sp.GetRequiredService<IOptions<TelemetryOptions>>(),
+    sp.GetRequiredService<TimeProvider>(),
+    sp.GetRequiredService<ILogger<RollupService>>()));
+
+// Ingestion queue: POST /ingest enqueues; QueuedIngestProcessor writes (SQS + Lambda analog).
+builder.Services.AddOptions<IngestionOptions>().BindConfiguration(IngestionOptions.SectionName);
+builder.Services.AddSingleton(sp => new SqlReadingQueue(
+    connectionString, sp.GetRequiredService<IOptions<IngestionOptions>>(), sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton<IngestMetrics>();
+builder.Services.AddHostedService(sp => new QueuedIngestProcessor(
+    connectionString,
+    sp.GetRequiredService<SqlReadingQueue>(),
+    sp.GetRequiredService<IngestMetrics>(),
+    sp.GetRequiredService<ILiveUpdateNotifier>(),
+    sp.GetRequiredService<IOptions<IngestionOptions>>(),
+    sp.GetRequiredService<ILogger<QueuedIngestProcessor>>()));
 
 // Read path: metadata from EF Core, time series from Dapper, joined in DashboardService.
 builder.Services.AddOptions<DashboardOptions>().BindConfiguration(DashboardOptions.SectionName);
@@ -45,6 +65,12 @@ builder.Services.AddSingleton<LiveConnectionTracker>();
 builder.Services.AddSingleton<LiveUpdateBroadcaster>();
 builder.Services.AddSingleton<ILiveUpdateNotifier>(sp => sp.GetRequiredService<LiveUpdateBroadcaster>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveUpdateBroadcaster>());
+
+// Alert lifecycle: debounced alerts evaluated from stored readings, notified via a pluggable sink.
+builder.Services.AddOptions<AlertOptions>().BindConfiguration(AlertOptions.SectionName);
+builder.Services.AddScoped<AlertService>();
+builder.Services.AddSingleton<IAlertNotificationSink, LoggingAlertNotificationSink>();
+builder.Services.AddHostedService<AlertEvaluator>();
 
 var app = builder.Build();
 
@@ -62,3 +88,6 @@ app.MapControllers();
 app.MapHub<TelemetryHub>("/hubs/telemetry");
 
 app.Run();
+
+// Exposes the entry point to WebApplicationFactory in integration tests.
+public partial class Program;

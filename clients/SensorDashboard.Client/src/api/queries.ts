@@ -1,6 +1,7 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { useLiveState } from './live'
+import type { AlertFilter } from './types'
 
 // While SignalR is connected, LiveProvider pushes fresh data into these queries and polling
 // is off. If the connection drops, they fall back to polling at the simulator's 5s tick.
@@ -12,6 +13,8 @@ export const queryKeys = {
   warehouses: ['warehouses'] as const,
   sensors: (warehouseId: string) => ['warehouses', warehouseId, 'sensors'] as const,
   scene: (warehouseId: string) => ['warehouses', warehouseId, 'scene'] as const,
+  alertsAll: ['alerts'] as const,
+  alerts: (filter: AlertFilter, warehouseId?: string) => ['alerts', filter, warehouseId ?? '*'] as const,
   sensorPropertiesAll: (sensorId: string) => ['sensors', sensorId, 'properties'] as const,
   sensorProperties: (sensorId: string, windowMinutes: number) =>
     ['sensors', sensorId, 'properties', windowMinutes] as const,
@@ -34,6 +37,24 @@ export function useSensors(warehouseId: string) {
     queryKey: queryKeys.sensors(warehouseId),
     queryFn: ({ signal }) => api.sensors(warehouseId, signal),
     refetchInterval: usePollingFallback(FALLBACK_REFETCH_MS),
+  })
+}
+
+/** Alerts; pushed changes (AlertsChanged) invalidate these, polling covers disconnects. */
+export function useAlerts(filter: AlertFilter, warehouseId?: string) {
+  return useQuery({
+    queryKey: queryKeys.alerts(filter, warehouseId),
+    queryFn: ({ signal }) => api.alerts(filter, warehouseId, signal),
+    refetchInterval: usePollingFallback(FALLBACK_REFETCH_MS),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useAcknowledgeAlert() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, by }: { id: number; by: string }) => api.acknowledgeAlert(id, by),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.alertsAll }),
   })
 }
 

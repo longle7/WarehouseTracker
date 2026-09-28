@@ -74,3 +74,28 @@ export interface SensorProperty {
   unit: string
   values: PropertyValue[]
 }
+
+export type AlertKind = 'temperatureOutOfRange' | 'doorOpenTooLong' | 'sensorOffline'
+export type AlertSeverity = 'warning' | 'critical'
+export type AlertState = 'open' | 'acknowledged' | 'resolved'
+export type AlertFilter = 'active' | 'resolved' | 'all'
+
+/** A debounced alert with a lifecycle (see AlertDto in the .NET contracts). */
+export interface Alert {
+  id: number
+  sensorId: string
+  warehouseId: string
+  location: string
+  kind: AlertKind
+  severity: AlertSeverity
+  state: AlertState
+  /** When the condition began, not when the alert was raised. */
+  openedAt: string
+  lastSeenAt: string
+  closedAt: string | null
+  acknowledgedAt: string | null
+  acknowledgedBy: string | null
+  escalatedAt: string | null
+  peakTemperature: number | null
+  message: string
+}

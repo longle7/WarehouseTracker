@@ -1,9 +1,11 @@
 import { Link } from 'react-router'
 import { Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, YAxis } from 'recharts'
 import { useLiveSubscription } from '../../api/live'
-import { useSensorProperties } from '../../api/queries'
+import { useAlerts, useSensorProperties } from '../../api/queries'
 import type { SceneUnit, Sensor, UnitType } from '../../api/types'
 import { formatAgo, formatPercent, formatTemp, formatTime } from '../format'
+import { AcknowledgeButton, SeverityBadge } from '../alerts'
+import { ALERT_KIND_LABEL, formatDuration, useAcknowledgeAs } from '../alertUtils'
 import { StatusBadge } from '../StatusBadge'
 
 const UNIT_LABEL: Record<UnitType, string> = {
@@ -88,12 +90,34 @@ export function UnitDetailPanel({ warehouseId, units, sensors, selectedId, onSel
         </div>
       </dl>
 
+      <UnitAlerts warehouseId={warehouseId} sensorId={unit.sensorId} />
+
       {sensor && <Sparkline sensor={sensor} />}
 
       <Link className="button-link" to={`/warehouses/${warehouseId}/sensors/${unit.sensorId}`}>
         Open full history →
       </Link>
     </aside>
+  )
+}
+
+function UnitAlerts({ warehouseId, sensorId }: { warehouseId: string; sensorId: string }) {
+  const alerts = (useAlerts('active', warehouseId).data ?? []).filter((a) => a.sensorId === sensorId)
+  const [by] = useAcknowledgeAs()
+  if (alerts.length === 0) return null
+  return (
+    <ul className="unit-alerts" aria-label="Active alerts">
+      {alerts.map((a) => (
+        <li key={a.id}>
+          <div>
+            <SeverityBadge severity={a.severity} />
+            <div className="small">{ALERT_KIND_LABEL[a.kind]} · {formatDuration(a.openedAt, null)}</div>
+            {a.state === 'acknowledged' && <div className="muted small">Acknowledged by {a.acknowledgedBy}</div>}
+          </div>
+          <AcknowledgeButton alert={a} by={by} />
+        </li>
+      ))}
+    </ul>
   )
 }
 

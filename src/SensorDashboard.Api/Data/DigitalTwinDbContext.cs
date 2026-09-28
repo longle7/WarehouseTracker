@@ -26,6 +26,11 @@ public sealed class DigitalTwinDbContext(DbContextOptions<DigitalTwinDbContext> 
             b.Property(w => w.Id).HasMaxLength(IdMaxLength).IsUnicode(false);
             b.Property(w => w.Name).HasMaxLength(200);
             b.Property(w => w.City).HasMaxLength(100);
+            b.ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_Warehouses_Latitude", "[Latitude] BETWEEN -90 AND 90");
+                t.HasCheckConstraint("CK_Warehouses_Longitude", "[Longitude] BETWEEN -180 AND 180");
+            });
             b.HasData(MetadataSeed.Warehouses);
         });
 

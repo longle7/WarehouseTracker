@@ -1,0 +1,37 @@
+using IoTDigitalTwin.Contracts.Telemetry;
+using Microsoft.AspNetCore.Mvc;
+using SensorDashboard.Api.Services;
+
+namespace SensorDashboard.Api.Controllers;
+
+[ApiController]
+[Route("sensors")]
+public sealed class SensorsController(DashboardService dashboard) : ControllerBase
+{
+    /// <summary>
+    /// Time-series history for one sensor, bucketed. Defaults to the last hour; the bucket
+    /// size is chosen automatically (about 300 points) unless <paramref name="bucketSeconds"/> is given.
+    /// </summary>
+    [HttpGet("{sensorId}/properties")]
+    [ProducesResponseType<IReadOnlyList<SensorPropertyDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<SensorPropertyDto>>> GetProperties(
+        string sensorId,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        [FromQuery] int? bucketSeconds,
+        CancellationToken cancellationToken)
+    {
+        var (range, error) = dashboard.ResolveRange(from, to, bucketSeconds);
+        if (range is null)
+        {
+            ModelState.AddModelError("range", error!);
+            return ValidationProblem(ModelState);
+        }
+
+        return await dashboard.GetPropertiesAsync(sensorId, range, cancellationToken) is { } properties
+            ? Ok(properties)
+            : Problem(statusCode: StatusCodes.Status404NotFound, title: $"Sensor '{sensorId}' not found.");
+    }
+}

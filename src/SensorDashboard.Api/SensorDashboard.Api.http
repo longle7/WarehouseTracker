@@ -1,3 +1,34 @@
 @SensorDashboard.Api_HostAddress = http://localhost:5278
 
+GET {{SensorDashboard.Api_HostAddress}}/warehouses
+Accept: application/json
+
+###
+
+GET {{SensorDashboard.Api_HostAddress}}/warehouses/WH-SEA/sensors
+Accept: application/json
+
+###
+
+# Last hour, auto bucket size. Optional: from, to (ISO 8601), bucketSeconds.
+GET {{SensorDashboard.Api_HostAddress}}/sensors/WH-SEA-FRG-01/properties
+Accept: application/json
+
+###
+
+POST {{SensorDashboard.Api_HostAddress}}/ingest
+Content-Type: application/json
+
+[
+  {
+    "sensorId": "WH-SEA-FRG-01",
+    "warehouseId": "WH-SEA",
+    "timestamp": "2026-09-28T12:00:00Z",
+    "temperature": 37.2,
+    "humidity": 49.5,
+    "doorOpen": false,
+    "isAnomaly": false
+  }
+]
+
 ###

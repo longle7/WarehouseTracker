@@ -10,9 +10,9 @@ internal static class MetadataSeed
 {
     public static Warehouse[] Warehouses { get; } =
     [
-        new() { Id = "WH-SEA", Name = "Seattle Distribution Center", City = "Seattle, WA" },
-        new() { Id = "WH-PDX", Name = "Portland Cold Storage", City = "Portland, OR" },
-        new() { Id = "WH-BOI", Name = "Boise Fulfillment Hub", City = "Boise, ID" },
+        new() { Id = "WH-SEA", Name = "Seattle Distribution Center", City = "Seattle, WA", Latitude = 47.6062, Longitude = -122.3321 },
+        new() { Id = "WH-PDX", Name = "Portland Cold Storage", City = "Portland, OR", Latitude = 45.5152, Longitude = -122.6784 },
+        new() { Id = "WH-BOI", Name = "Boise Fulfillment Hub", City = "Boise, ID", Latitude = 43.6150, Longitude = -116.2023 },
     ];
 
     public static Sensor[] Sensors { get; } =

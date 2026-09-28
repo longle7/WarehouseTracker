@@ -8,5 +8,9 @@ public sealed class Warehouse
 
     public required string City { get; set; }
 
+    public double Latitude { get; set; }
+
+    public double Longitude { get; set; }
+
     public List<Sensor> Sensors { get; } = [];
 }

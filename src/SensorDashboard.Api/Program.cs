@@ -1,14 +1,19 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SensorDashboard.Api.Data;
 using SensorDashboard.Api.Data.Telemetry;
+using SensorDashboard.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var connectionString = builder.Configuration.GetConnectionString("IoTDigitalTwin")
     ?? throw new InvalidOperationException("Connection string 'IoTDigitalTwin' is not configured.");
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    // Enums as camelCase strings, e.g. SensorStatus.Offline -> "offline".
+    .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
@@ -25,6 +30,11 @@ builder.Services.AddHostedService(sp => new PartitionMaintenanceService(
     sp.GetRequiredService<IOptions<TelemetryOptions>>(),
     sp.GetRequiredService<TimeProvider>(),
     sp.GetRequiredService<ILogger<PartitionMaintenanceService>>()));
+
+// Read path: metadata from EF Core, time series from Dapper, joined in DashboardService.
+builder.Services.AddOptions<DashboardOptions>().BindConfiguration(DashboardOptions.SectionName);
+builder.Services.AddSingleton<IReadingQueries>(_ => new SqlReadingQueries(connectionString));
+builder.Services.AddScoped<DashboardService>();
 
 var app = builder.Build();
 

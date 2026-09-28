@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SensorDashboard.Api.Data;
 using SensorDashboard.Api.Data.Telemetry;
+using SensorDashboard.Api.Realtime;
 using SensorDashboard.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,9 +12,10 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("IoTDigitalTwin")
     ?? throw new InvalidOperationException("Connection string 'IoTDigitalTwin' is not configured.");
 
+// Enums as camelCase strings, e.g. SensorStatus.Offline -> "offline", for REST and SignalR alike.
+var enumConverter = new JsonStringEnumConverter(JsonNamingPolicy.CamelCase);
 builder.Services.AddControllers()
-    // Enums as camelCase strings, e.g. SensorStatus.Offline -> "offline".
-    .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
+    .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(enumConverter));
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
@@ -36,6 +38,14 @@ builder.Services.AddOptions<DashboardOptions>().BindConfiguration(DashboardOptio
 builder.Services.AddSingleton<IReadingQueries>(_ => new SqlReadingQueries(connectionString));
 builder.Services.AddScoped<DashboardService>();
 
+// Live push: SignalR hub fed by a broadcaster that ingestion notifies.
+builder.Services.AddSignalR()
+    .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(enumConverter));
+builder.Services.AddSingleton<LiveConnectionTracker>();
+builder.Services.AddSingleton<LiveUpdateBroadcaster>();
+builder.Services.AddSingleton<ILiveUpdateNotifier>(sp => sp.GetRequiredService<LiveUpdateBroadcaster>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveUpdateBroadcaster>());
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -49,5 +59,6 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<TelemetryHub>("/hubs/telemetry");
 
 app.Run();

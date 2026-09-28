@@ -18,6 +18,12 @@ public sealed class DashboardOptions
 
     public TimeSpan MaxHistoryWindow { get; set; } = TimeSpan.FromDays(31);
 
+    /// <summary>
+    /// Live snapshots are pushed after each ingest and at least this often, so sensors that
+    /// stop reporting flip to offline on connected dashboards without any new readings.
+    /// </summary>
+    public TimeSpan LiveHeartbeat { get; set; } = TimeSpan.FromSeconds(5);
+
     /// <summary>Target point count when choosing a bucket size automatically.</summary>
     public int TargetHistoryPoints { get; set; } = 300;
 }

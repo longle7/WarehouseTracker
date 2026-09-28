@@ -1,6 +1,7 @@
 using IoTDigitalTwin.Contracts.Telemetry;
 using Microsoft.AspNetCore.Mvc;
 using SensorDashboard.Api.Data.Telemetry;
+using SensorDashboard.Api.Realtime;
 
 namespace SensorDashboard.Api.Controllers;
 
@@ -9,7 +10,7 @@ namespace SensorDashboard.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("ingest")]
-public sealed class IngestController(IReadingWriter writer) : ControllerBase
+public sealed class IngestController(IReadingWriter writer, ILiveUpdateNotifier liveUpdates) : ControllerBase
 {
     public const int MaxBatchSize = 1000;
 
@@ -26,6 +27,12 @@ public sealed class IngestController(IReadingWriter writer) : ControllerBase
             return ValidationProblem(ModelState);
         }
 
-        return Ok(await writer.WriteAsync(readings, cancellationToken));
+        var result = await writer.WriteAsync(readings, cancellationToken);
+        if (result.Inserted > 0)
+        {
+            liveUpdates.NotifyIngested(readings);
+        }
+
+        return Ok(result);
     }
 }

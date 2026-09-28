@@ -1,14 +1,24 @@
-import { useIsFetching } from '@tanstack/react-query'
+import { useLiveState } from './api/live'
 import { createBrowserRouter, isRouteErrorResponse, Link, Outlet, RouterProvider, useRouteError } from 'react-router'
 
+const LIVE_LABEL = {
+  live: 'Live · pushed via SignalR',
+  connecting: 'Connecting…',
+  reconnecting: 'Reconnecting · polling every 5s',
+  offline: 'Push unavailable · polling every 5s',
+} as const
+
 function Layout() {
-  const fetching = useIsFetching() > 0
+  const live = useLiveState()
 
   return (
     <>
       <header className="app-header">
         <Link to="/" className="brand">Sensor Dashboard</Link>
-        <span className="live" aria-live="polite">{fetching ? 'Updating…' : 'Live · refreshes every 5s'}</span>
+        <span className={`live ${live}`} aria-live="polite">
+          <span className="live-dot" aria-hidden />
+          {LIVE_LABEL[live]}
+        </span>
       </header>
       <Outlet />
     </>

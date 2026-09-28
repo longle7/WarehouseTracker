@@ -28,28 +28,8 @@ public sealed class DashboardService(
 
     private DashboardOptions Options => options.Value;
 
-    public async Task<IReadOnlyList<WarehouseDto>> GetWarehousesAsync(CancellationToken cancellationToken)
-    {
-        var warehouses = await db.Warehouses
-            .AsNoTracking()
-            .Include(w => w.Sensors)
-            .OrderBy(w => w.Name)
-            .ToListAsync(cancellationToken);
-
-        var statuses = await GetStatusesAsync(warehouses.SelectMany(w => w.Sensors).ToList(), cancellationToken);
-
-        return warehouses
-            .Select(w => new WarehouseDto(
-                w.Id,
-                w.Name,
-                w.City,
-                w.Latitude,
-                w.Longitude,
-                SensorCount: w.Sensors.Count,
-                AlertCount: w.Sensors.Count(s => statuses[s.Id].Status == SensorStatus.Alert),
-                OfflineCount: w.Sensors.Count(s => statuses[s.Id].Status == SensorStatus.Offline)))
-            .ToList();
-    }
+    public async Task<IReadOnlyList<WarehouseDto>> GetWarehousesAsync(CancellationToken cancellationToken) =>
+        (await GetSnapshotAsync(cancellationToken)).Warehouses;
 
     /// <returns>null if the warehouse doesn't exist.</returns>
     public async Task<IReadOnlyList<SensorDto>?> GetSensorsAsync(string warehouseId, CancellationToken cancellationToken)
@@ -64,21 +44,49 @@ public sealed class DashboardService(
         }
 
         var statuses = await GetStatusesAsync(warehouse.Sensors, cancellationToken);
-
-        return warehouse.Sensors
-            .Select(s => new SensorDto(
-                s.Id,
-                s.WarehouseId,
-                s.Location,
-                s.MinTemperatureF,
-                s.MaxTemperatureF,
-                s.IsActive,
-                statuses[s.Id].Status,
-                statuses[s.Id].Last is { } r
-                    ? new LastReadingDto(r.Timestamp, r.Temperature, r.Humidity, r.DoorOpen, r.IsAnomaly)
-                    : null))
-            .ToList();
+        return warehouse.Sensors.Select(s => ToSensorDto(s, statuses[s.Id])).ToList();
     }
+
+    /// <summary>
+    /// Every warehouse summary and every warehouse's sensor list, from one metadata load and
+    /// one latest-reading query. Used by the live broadcaster; same shapes as the GET endpoints.
+    /// </summary>
+    public async Task<DashboardSnapshot> GetSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var warehouses = await db.Warehouses
+            .AsNoTracking()
+            .Include(w => w.Sensors.OrderBy(s => s.Id))
+            .OrderBy(w => w.Name)
+            .ToListAsync(cancellationToken);
+
+        var statuses = await GetStatusesAsync(warehouses.SelectMany(w => w.Sensors).ToList(), cancellationToken);
+
+        return new DashboardSnapshot(
+            warehouses.Select(w => new WarehouseDto(
+                    w.Id,
+                    w.Name,
+                    w.City,
+                    w.Latitude,
+                    w.Longitude,
+                    SensorCount: w.Sensors.Count,
+                    AlertCount: w.Sensors.Count(s => statuses[s.Id].Status == SensorStatus.Alert),
+                    OfflineCount: w.Sensors.Count(s => statuses[s.Id].Status == SensorStatus.Offline)))
+                .ToList(),
+            warehouses.ToDictionary(
+                w => w.Id,
+                w => (IReadOnlyList<SensorDto>)w.Sensors.Select(s => ToSensorDto(s, statuses[s.Id])).ToList()));
+    }
+
+    private static SensorDto ToSensorDto(Sensor s, (SensorStatus Status, LatestReading? Last) state) =>
+        new(
+            s.Id,
+            s.WarehouseId,
+            s.Location,
+            s.MinTemperatureF,
+            s.MaxTemperatureF,
+            s.IsActive,
+            state.Status,
+            state.Last is { } r ? new LastReadingDto(r.Timestamp, r.Temperature, r.Humidity, r.DoorOpen, r.IsAnomaly) : null);
 
     /// <returns>null if the sensor doesn't exist.</returns>
     public async Task<IReadOnlyList<SensorPropertyDto>?> GetPropertiesAsync(
@@ -151,3 +159,7 @@ public sealed class DashboardService(
 }
 
 public sealed record HistoryRange(DateTimeOffset From, DateTimeOffset To, TimeSpan Bucket);
+
+public sealed record DashboardSnapshot(
+    IReadOnlyList<WarehouseDto> Warehouses,
+    IReadOnlyDictionary<string, IReadOnlyList<SensorDto>> SensorsByWarehouse);

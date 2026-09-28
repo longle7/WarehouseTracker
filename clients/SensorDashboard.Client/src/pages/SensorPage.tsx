@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
+import { useLiveSubscription } from '../api/live'
 import { useSensorProperties, useSensors, useWarehouses } from '../api/queries'
 import { formatAgo, formatPercent, formatTemp } from '../components/format'
 import { QueryState } from '../components/QueryState'
@@ -23,6 +24,9 @@ export function SensorPage() {
   const sensor = sensorsQuery.data?.find((s) => s.id === sensorId)
   const warehouse = useWarehouses().data?.find((w) => w.id === warehouseId)
   const propertiesQuery = useSensorProperties(sensorId, windowMinutes)
+  // Warehouse group keeps this sensor's status live; sensor group triggers chart refreshes.
+  useLiveSubscription('warehouse', warehouseId)
+  useLiveSubscription('sensor', sensorId)
 
   if (sensorsQuery.data && !sensor) {
     return <main className="page"><div className="state error">Sensor '{sensorId}' isn't in warehouse '{warehouseId}'.</div></main>

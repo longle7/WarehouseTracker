@@ -5,11 +5,13 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react()],
   server: {
-    // Same-origin in dev: /api/* is forwarded to SensorDashboard.Api, so no CORS setup.
+    // Same-origin in dev: /api/* (REST and the SignalR hub) is forwarded to SensorDashboard.Api,
+    // so no CORS setup.
     proxy: {
       '/api': {
         target: process.env.API_URL ?? 'http://localhost:5278',
         changeOrigin: true,
+        ws: true, // SignalR WebSocket transport
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },

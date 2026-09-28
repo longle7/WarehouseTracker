@@ -1,4 +1,5 @@
 import { Link, useNavigate, useParams } from 'react-router'
+import { useLiveSubscription } from '../api/live'
 import { useSensors, useWarehouses } from '../api/queries'
 import type { Sensor } from '../api/types'
 import { formatAgo, formatPercent, formatTemp } from '../components/format'
@@ -9,6 +10,7 @@ import { Stat } from '../components/Stat'
 export function WarehousePage() {
   const { warehouseId = '' } = useParams()
   const sensorsQuery = useSensors(warehouseId)
+  useLiveSubscription('warehouse', warehouseId)
   // Shares the cached, polled warehouse list with the overview page.
   const warehouse = useWarehouses().data?.find((w) => w.id === warehouseId)
 

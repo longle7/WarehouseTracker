@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import type { ReactNode } from 'react'
 import type { Sensor, SensorHistory, SensorProperty, SensorPropertyName } from '../api/types'
+import { EmptyState } from './EmptyState'
 import { formatDateTime, formatPercent, formatTemp, formatTime } from './format'
 import { isOutOfRange } from './status'
 
@@ -151,7 +152,13 @@ function AnomalyDot(props: { cx?: number; cy?: number; index?: number; payload?:
 
 export function SensorCharts({ sensor, history }: { sensor: Sensor; history: SensorHistory }) {
   const rows = toRows(history.properties)
-  if (rows.length === 0) return <div className="card state">No readings in this window.</div>
+  if (rows.length === 0) {
+    return (
+      <EmptyState icon="∿" title="No readings in this window">
+        The sensor hasn't reported in this time range. Try a longer window, or check the sensor's status.
+      </EmptyState>
+    )
+  }
   const chartRows = withGaps(rows)
 
   const minT = sensor.minTemperatureF

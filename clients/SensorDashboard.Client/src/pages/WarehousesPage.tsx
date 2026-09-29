@@ -1,7 +1,9 @@
 import { Link } from 'react-router'
 import { useWarehouses } from '../api/queries'
 import type { Warehouse } from '../api/types'
+import { EmptyState } from '../components/EmptyState'
 import { QueryState } from '../components/QueryState'
+import { SkeletonList, SkeletonPanel, SkeletonStats } from '../components/Skeleton'
 import { Stat } from '../components/Stat'
 import { warehouseStatus } from '../components/status'
 import { StatusBadge } from '../components/StatusBadge'
@@ -16,7 +18,18 @@ export function WarehousesPage() {
         <h1>Warehouses</h1>
         <p className="subtitle">Live cold-chain status across all sites. Select a pin or a warehouse to see its sensors.</p>
       </div>
-      <QueryState query={query}>{(warehouses) => <Overview warehouses={warehouses} />}</QueryState>
+      <QueryState
+        query={query}
+        loading={<><SkeletonStats /><div className="overview"><SkeletonPanel height={420} /><SkeletonList rows={3} /></div></>}
+        isEmpty={(warehouses) => warehouses.length === 0}
+        empty={
+          <EmptyState icon="▦" title="No warehouses yet">
+            Warehouses and their sensors are defined in the metadata database (seeded by the migrations).
+          </EmptyState>
+        }
+      >
+        {(warehouses) => <Overview warehouses={warehouses} />}
+      </QueryState>
     </main>
   )
 }

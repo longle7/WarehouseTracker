@@ -1,4 +1,5 @@
 using IoTDigitalTwin.Contracts.Alerts;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -17,9 +18,11 @@ namespace SensorDashboard.Api.Data.Alerts;
 /// </summary>
 public sealed class AlertEvaluator(
     IServiceScopeFactory scopeFactory,
+    MetadataCache metadata,
     IReadingQueries readings,
     IAlertNotificationSink notifications,
     IHubContext<TelemetryHub, ITelemetryClient> hub,
+    IOutputCacheStore outputCache,
     IOptions<AlertOptions> alertOptions,
     IOptions<DashboardOptions> dashboardOptions,
     TimeProvider timeProvider,
@@ -36,7 +39,7 @@ public sealed class AlertEvaluator(
         var options = alertOptions.Value;
         var now = Clock.GetUtcNow();
 
-        var sensors = await db.Sensors.AsNoTracking().ToListAsync(cancellationToken);
+        var sensors = await metadata.GetSensorsAsync(cancellationToken);
         var active = await db.Alerts.Where(a => a.ClosedAt == null).ToListAsync(cancellationToken);
         var streaks = await readings.GetConditionStreaksAsync(
             sensors.Select(s => new SensorThresholds(s.Id, s.MinTemperatureF, s.MaxTemperatureF)).ToList(),
@@ -113,6 +116,7 @@ public sealed class AlertEvaluator(
         {
             await notifications.SendAsync(new AlertNotification(evt, dto), cancellationToken);
         }
+        await outputCache.EvictByTagAsync(ResponseCaching.AlertsTag, cancellationToken);
         await hub.Clients.All.AlertsChanged(dtos.Select(d => d.Dto).ToList());
     }
 }

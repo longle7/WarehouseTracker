@@ -64,6 +64,25 @@ public class StoreAndForwardTests
     }
 
     [Fact]
+    public async Task Every_resend_of_a_batch_carries_the_same_idempotency_key()
+    {
+        var (delivery, api) = Create();
+        delivery.Enqueue(Batch(1));
+        delivery.Enqueue(Batch(2));
+
+        api.Down = true;
+        await delivery.DeliverPendingAsync(default); // attempt 1 of batch 1 fails
+        await delivery.DeliverPendingAsync(default); // attempt 2 of batch 1 fails
+        api.Down = false;
+        await delivery.DeliverPendingAsync(default); // batch 1 then batch 2 succeed
+
+        Assert.Equal(4, api.Keys.Count);
+        Assert.Equal(api.Keys[0], api.Keys[1]);
+        Assert.Equal(api.Keys[0], api.Keys[2]);
+        Assert.NotEqual(api.Keys[2], api.Keys[3]);
+    }
+
+    [Fact]
     public async Task Full_buffer_drops_the_oldest_batches()
     {
         var (delivery, api) = Create(capacity: 3);
@@ -139,8 +158,11 @@ public class StoreAndForwardTests
             get { lock (_gate) return [.. _delivered]; }
         }
 
-        public Task PublishAsync(IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken)
+        public List<string> Keys { get; } = [];
+
+        public Task PublishAsync(IReadOnlyList<SensorReadingDto> readings, string idempotencyKey, CancellationToken cancellationToken)
         {
+            lock (_gate) Keys.Add(idempotencyKey);
             if (Down) throw new HttpRequestException("Connection refused");
             if (Tick(readings) == RejectTick) throw new HttpRequestException("Bad batch", null, HttpStatusCode.BadRequest);
             lock (_gate) _delivered.Add(readings);

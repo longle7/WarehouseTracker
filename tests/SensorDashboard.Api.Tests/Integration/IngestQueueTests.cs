@@ -81,9 +81,45 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
 
 
     [Fact]
+    public async Task Retried_requests_with_the_same_idempotency_key_are_queued_once()
+    {
+        await using var factory = new ApiFactory(db.ConnectionString);
+        var client = factory.CreateClient();
+        var body = new[] { Reading(SeaDairy, Now()) };
+
+        async Task<HttpResponseMessage> Send(string key)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/ingest") { Content = JsonContent.Create(body) };
+            request.Headers.Add("Idempotency-Key", key);
+            return await client.SendAsync(request);
+        }
+
+        var first = await Send("batch-123");
+        var retry = await Send("batch-123");
+        var other = await Send("batch-456");
+
+        var firstId = (await first.Content.ReadFromJsonAsync<IngestAcceptedDto>())!.BatchId;
+        Assert.Equal(firstId, (await retry.Content.ReadFromJsonAsync<IngestAcceptedDto>())!.BatchId);
+        Assert.NotEqual(firstId, (await other.Content.ReadFromJsonAsync<IngestAcceptedDto>())!.BatchId);
+        Assert.False(first.Headers.Contains("Idempotency-Replayed"));
+        Assert.Equal("true", retry.Headers.GetValues("Idempotency-Replayed").Single());
+        Assert.Equal(1, await db.ScalarAsync<int>("SELECT COUNT(*) FROM ingest.IdempotencyKeys WHERE [Key] = N'batch-123'"));
+    }
+
+    [Fact]
+    public async Task Overlong_idempotency_keys_are_rejected()
+    {
+        await using var factory = new ApiFactory(db.ConnectionString);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/ingest") { Content = JsonContent.Create(new[] { Reading(SeaDairy, Now()) }) };
+        request.Headers.Add("Idempotency-Key", new string('k', 101));
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await factory.CreateClient().SendAsync(request)).StatusCode);
+    }
+
+    [Fact]
     public async Task Dequeue_is_undone_by_rollback()
     {
-        await _queue.EnqueueAsync([Reading(SeaDairy, Now())], default);
+        await _queue.EnqueueAsync([Reading(SeaDairy, Now())], null, default);
 
         await using (var connection = new SqlConnection(db.ConnectionString))
         {
@@ -105,7 +141,7 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
         await connection.OpenAsync();
         for (var i = 0; i < 200; i++)
         {
-            var id = await _queue.EnqueueAsync([Reading(SeaDairy, Now())], default);
+            var id = (await _queue.EnqueueAsync([Reading(SeaDairy, Now())], null, default)).BatchId;
             await using var command = new SqlCommand(
                 $"SELECT COUNT(*) FROM ingest.ReadingBatches WHERE Id = {id} AND AvailableAt <= SYSUTCDATETIME();", connection);
             Assert.Equal(1, (int)(await command.ExecuteScalarAsync())!);
@@ -115,8 +151,8 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
     [Fact]
     public async Task Concurrent_consumers_never_take_the_same_batch()
     {
-        await _queue.EnqueueAsync([Reading(SeaDairy, Now())], default);
-        await _queue.EnqueueAsync([Reading(SeaProduce, Now())], default);
+        await _queue.EnqueueAsync([Reading(SeaDairy, Now())], null, default);
+        await _queue.EnqueueAsync([Reading(SeaProduce, Now())], null, default);
 
         await using var c1 = new SqlConnection(db.ConnectionString);
         await using var c2 = new SqlConnection(db.ConnectionString);
@@ -137,7 +173,7 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
     [Fact]
     public async Task Failures_back_off_then_dead_letter_and_can_be_replayed()
     {
-        var id = await _queue.EnqueueAsync([Reading(SeaDairy, Now())], default);
+        var id = (await _queue.EnqueueAsync([Reading(SeaDairy, Now())], null, default)).BatchId;
         var batch = new QueuedBatch(id, Attempts: 0, Payload: "", EnqueuedAt: default);
 
         // Attempts 1 and 2 of 3: rescheduled into the future.
@@ -201,7 +237,7 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
     [Fact]
     public async Task Status_reports_queued_retrying_and_dead_lettered_batches()
     {
-        var queued = await _queue.EnqueueAsync([Reading(SeaDairy, Now())], default);
+        var queued = (await _queue.EnqueueAsync([Reading(SeaDairy, Now())], null, default)).BatchId;
         Assert.Equal(IngestBatchStatus.Queued, (await _queue.GetBatchStatusAsync(queued, default))!.Status);
 
         await _queue.RecordFailureAsync(new QueuedBatch(queued, 0, "", default), "db timeout", poison: false, default);

@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using IoTDigitalTwin.Contracts;
 using IoTDigitalTwin.Contracts.Metadata;
 using IoTDigitalTwin.Contracts.Telemetry;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using static SensorDashboard.Api.Tests.Integration.TestData;
@@ -110,6 +112,37 @@ public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
         Assert.Equal((40, 25), (scene!.FloorWidth, scene.FloorDepth));
         Assert.Equal(4, scene.Units.Count);
         Assert.All(scene.Units, u => Assert.True(u.Width > 0 && u.Depth > 0 && u.Height > 0));
+    }
+
+    private HubConnection Hub() => new HubConnectionBuilder()
+        .WithUrl(new Uri(_factory.Server.BaseAddress, "/hubs/telemetry"), o =>
+        {
+            o.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+            o.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.LongPolling;
+        })
+        .AddJsonProtocol(o => o.PayloadSerializerOptions = ContractJson.Options)
+        .Build();
+
+    [Fact]
+    public async Task Hub_subscriptions_are_idempotent_validated_and_capped()
+    {
+        await using var hub = Hub();
+        await hub.StartAsync();
+
+        Assert.Equal("added", (await hub.InvokeAsync<JsonElement>("SubscribeWarehouse", Seattle)).GetString());
+        Assert.Equal("alreadySubscribed", (await hub.InvokeAsync<JsonElement>("SubscribeWarehouse", Seattle)).GetString());
+
+        var invalid = await Assert.ThrowsAsync<HubException>(() => hub.InvokeAsync<JsonElement>("SubscribeSensor", "not a valid id!"));
+        Assert.Contains("Invalid", invalid.Message);
+
+        // Default cap is 20 groups per connection.
+        for (var i = 0; i < 19; i++) await hub.InvokeAsync<JsonElement>("SubscribeSensor", $"S-{i}");
+        var capped = await Assert.ThrowsAsync<HubException>(() => hub.InvokeAsync<JsonElement>("SubscribeSensor", "one-too-many"));
+        Assert.Contains("limit", capped.Message);
+
+        // Unsubscribing frees a slot.
+        await hub.InvokeAsync("UnsubscribeSensor", "S-0");
+        Assert.Equal("added", (await hub.InvokeAsync<JsonElement>("SubscribeSensor", "one-more")).GetString());
     }
 
     [Fact]

@@ -20,7 +20,7 @@ public sealed class StoreAndForward(
 {
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
 
-    private readonly LinkedList<IReadOnlyList<SensorReadingDto>> _backlog = new();
+    private readonly LinkedList<PendingBatch> _backlog = new();
     private readonly Lock _gate = new();
     private readonly SemaphoreSlim _enqueued = new(0, int.MaxValue);
     private bool _failing;
@@ -39,7 +39,7 @@ public sealed class StoreAndForward(
 
         lock (_gate)
         {
-            _backlog.AddLast(batch);
+            _backlog.AddLast(new PendingBatch(batch, Guid.NewGuid().ToString("N")));
             while (_backlog.Count > options.Value.MaxBufferedBatches)
             {
                 _backlog.RemoveFirst();
@@ -82,13 +82,13 @@ public sealed class StoreAndForward(
     {
         while (true)
         {
-            LinkedListNode<IReadOnlyList<SensorReadingDto>>? next;
+            LinkedListNode<PendingBatch>? next;
             lock (_gate) next = _backlog.First;
             if (next is null) break;
 
             try
             {
-                await publisher.PublishAsync(next.Value, cancellationToken);
+                await publisher.PublishAsync(next.Value.Readings, next.Value.IdempotencyKey, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -96,7 +96,7 @@ public sealed class StoreAndForward(
             }
             catch (HttpRequestException ex) when (IsPermanent(ex.StatusCode))
             {
-                logger.LogError("API rejected a batch of {Count} readings ({Status}); dropping it", next.Value.Count, ex.StatusCode);
+                logger.LogError("API rejected a batch of {Count} readings ({Status}); dropping it", next.Value.Readings.Count, ex.StatusCode);
             }
             catch (Exception ex)
             {
@@ -122,6 +122,8 @@ public sealed class StoreAndForward(
         }
         return true;
     }
+
+    private sealed record PendingBatch(IReadOnlyList<SensorReadingDto> Readings, string IdempotencyKey);
 
     /// <summary>4xx other than 408 (timeout) and 429 (rate limited) won't succeed on retry.</summary>
     internal static bool IsPermanent(HttpStatusCode? status) =>

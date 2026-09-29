@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using SensorDashboard.Api.Data.Ingestion;
 using SensorDashboard.Api.Data.Telemetry;
 using SensorDashboard.Api.Realtime;
+using SensorDashboard.Api.Services;
 
 namespace SensorDashboard.Api.Controllers;
 
@@ -23,18 +24,27 @@ public sealed class IngestController(
 {
     public const int MaxBatchSize = 1000;
 
-    public const int MaxRequestBytes = 1024 * 1024;
+    /// <summary>Optional header; retries carrying the same key are not queued twice.</summary>
+    public const string IdempotencyKeyHeader = "Idempotency-Key";
 
     [HttpPost]
-    [RequestSizeLimit(MaxRequestBytes)]
-    [EnableRateLimiting(IngestRateLimiting.Policy)]
+    [EnableRateLimiting(ApiProtection.IngestPolicy)]
     [ProducesResponseType<IngestAcceptedDto>(StatusCodes.Status202Accepted)]
     [ProducesResponseType<IngestResultDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
-    public async Task<IActionResult> Post([FromBody] IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken)
+    public async Task<IActionResult> Post(
+        [FromBody] IReadOnlyList<SensorReadingDto> readings,
+        [FromHeader(Name = IdempotencyKeyHeader)] string? idempotencyKey,
+        CancellationToken cancellationToken)
     {
+        if (idempotencyKey is { Length: 0 or > 100 })
+        {
+            ModelState.AddModelError(IdempotencyKeyHeader, "Idempotency-Key must be 1-100 characters.");
+            return ValidationProblem(ModelState);
+        }
+
         if (readings.Count is 0 or > MaxBatchSize)
         {
             ModelState.AddModelError(nameof(readings), $"A batch must contain between 1 and {MaxBatchSize} readings.");
@@ -44,6 +54,7 @@ public sealed class IngestController(
         if (options.Value.Mode == IngestionMode.Direct)
         {
             var result = await writer.WriteAsync(readings, cancellationToken);
+            metrics.Processed(result);
             if (result.Inserted > 0) liveUpdates.NotifyIngested(readings);
             return Ok(result);
         }
@@ -58,7 +69,12 @@ public sealed class IngestController(
                 title: "Ingestion backlog is full; retry later.");
         }
 
-        var batchId = await queue.EnqueueAsync(readings, cancellationToken);
+        var (batchId, replayed) = await queue.EnqueueAsync(readings, idempotencyKey, cancellationToken);
+        if (replayed)
+        {
+            // A retry of a request we already accepted: same answer, nothing queued twice.
+            Response.Headers["Idempotency-Replayed"] = "true";
+        }
         // Location points at the batch's status, so producers can see what happened to it.
         return AcceptedAtAction(nameof(Batch), new { id = batchId }, new IngestAcceptedDto(batchId, readings.Count));
     }

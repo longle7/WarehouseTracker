@@ -135,6 +135,31 @@ A sensor's *status* is instantaneous. An *alert* is stored history: `ops.Alerts`
 - *Containers:* the API has a built-in health probe (`--healthcheck`, since the runtime image has no curl), the simulator waits for a healthy API, logs rotate, and SQL Server's memory is capped.
 - *Proven by a chaos test:* `scripts/chaos-test.sh` stops the API, then SQL Server, for 30s each mid-stream, then checks that every sensor's readings across the whole window are gap-free. CI runs it on every push.
 
+**Operability: limits, errors, caching and monitoring.**
+- *Limits:*
+  - A per-client token bucket on every endpoint (100/s, burst 200), with health probes exempt, plus a stricter one on `POST /ingest`. Over-limit requests get 429 + `Retry-After`.
+  - A 1 MB server-wide request body cap and SignalR message and connection limits.
+  - Hub subscriptions are idempotent, ID-validated and capped at 20 per connection.
+- *Errors:* one exception handler returns ProblemDetails with a `traceId` and never a stack trace. Transient SQL errors return 503 + `Retry-After`, timeouts 504, and aborted requests aren't logged as errors.
+- *Timeouts:* requests are cut off at 15s (504), SQL commands time out at 15s (maintenance jobs get 5 min), and the dashboard abandons requests after 10s.
+- *No duplicate submissions:* `POST /ingest` honors an `Idempotency-Key` header. A retry returns the original batch (`Idempotency-Replayed: true`) instead of queuing it again, and the simulator sends one key per batch across all resends.
+- *Caching, based on measurement:* the hot telemetry queries already run in 2–4 ms as index seeks, so the waste was repetition, not slow SQL.
+  - Metadata is cached in memory (30s, single-flight load).
+  - Live GETs are output-cached for 2s, so many dashboards polling cost one query.
+  - The 3D scene is cached for 10 min and browser-cacheable.
+  - Acknowledging an alert evicts the cached alert lists.
+- *Monitoring:*
+  - Health checks cover the database, the ingest backlog and data freshness.
+  - A sampler records each result every 30s, buffering while the DB is down, and logs every state change.
+  - `GET /status` (and the dashboard's Status page) shows uptime over 24h and 7d plus incidents.
+  - Browser errors are reported to `POST /client-errors` and logged.
+  - An outside-in `uptime-probe` container logs UP/DOWN for the API and dashboard, even when the API itself is down.
+- *Dashboard states:*
+  - Skeleton loaders shaped like the content, and empty states that say what's missing.
+  - Error cards with retry and a trace reference.
+  - A "couldn't refresh — showing data from Ns ago" banner when a refresh fails.
+  - Retries only for failures that can succeed (network, timeout, 5xx, 429), honoring `Retry-After`.
+
 **Ingestion is idempotent, so retries are safe.**
 - The simulator retries POSTs through Polly: exponential backoff with jitter, a circuit breaker and timeouts.
 - A retry, or a queue batch reprocessed after an ambiguous commit, can deliver readings the server already stored, so the readings table has a unique index on `(SensorId, Timestamp)` with `IGNORE_DUP_KEY = ON`. Duplicates are counted and dropped instead of failing the batch. Delivery is at-least-once, but each reading is stored once.
@@ -185,7 +210,7 @@ What happens:
 3. `api` starts only after migration succeeds. `simulator` loads its warehouses and sensors from the API, retrying until it's up, then starts streaming.
 4. `dashboard` (nginx) serves the built React app and proxies `/api`, including the SignalR WebSocket, to the API on the same origin.
 
-Data persists in the `sqldata` volume; `docker compose down -v` resets it. SQL Server is published on 14333 so it doesn't collide with a local instance on 1433.
+The `uptime-probe` service logs UP/DOWN transitions for the API and dashboard (`docker compose logs uptime-probe`). Data persists in the `sqldata` volume; `docker compose down -v` resets it. SQL Server is published on 14333 so it doesn't collide with a local instance on 1433.
 
 ## Continuous integration
 
@@ -228,7 +253,9 @@ dotnet test
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /ingest` | Batch of `SensorReadingDto` (1–1000). Queued mode: **202** `{ batchId, received }`, or **503** + `Retry-After` when the backlog is full. Direct mode: 200 `{ received, inserted, duplicates, rejected }`. |
+| `POST /ingest` | Batch of `SensorReadingDto` (1–1000); optional `Idempotency-Key` header. Queued mode: **202** `{ batchId, received }`, or **503** + `Retry-After` when the backlog is full. Direct mode: 200 `{ received, inserted, duplicates, rejected }`. |
+| `GET /status` | Live health checks, uptime (24h / 7d) and recent incidents. |
+| `POST /client-errors` | Dashboard error report for the server log (10/min per client). |
 | `GET /ingest/batches/{id}` | One batch's fate (the 202's `Location`): `queued`, `retrying` (with next attempt and last error), `processed` (with inserted/duplicate/rejected counts), or `deadLettered`. |
 | `GET /ingest/stats` | Queue depth, oldest backlog age, dead-letter count, processing counters. |
 | `GET /ingest/dead-letters` · `POST /ingest/dead-letters/{id}/replay` | Inspect failed batches; put one back on the queue. |
@@ -246,7 +273,7 @@ Sensor status is evaluated in this order:
 3. `alert`: the latest reading is flagged, or outside the sensor's own safe range.
 4. `ok`: otherwise.
 
-The thresholds live in the `Dashboard` configuration section. Alert grace periods, escalation and severity live in `Alerts`, queue limits in `Ingestion`, and rollup settings in `Telemetry`.
+The thresholds live in the `Dashboard` configuration section. Rate limits and timeouts are under `ApiLimits`, and the health sample interval under `Monitoring`. Alert grace periods, escalation and severity live in `Alerts`, queue limits in `Ingestion`, and rollup settings in `Telemetry`.
 
 ## Not yet built (production gaps)
 

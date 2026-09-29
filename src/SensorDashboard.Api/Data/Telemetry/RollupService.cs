@@ -19,6 +19,8 @@ public sealed class RollupService(
 {
     private const int MaxBucketsPerRun = 5000;
 
+    private const int MaintenanceCommandTimeoutSeconds = 300;
+
     protected override TimeSpan Interval => options.Value.RollupRefreshInterval;
 
     protected override async Task RunOnceAsync(CancellationToken cancellationToken)
@@ -39,6 +41,8 @@ public sealed class RollupService(
             await using var command = new SqlCommand("telemetry.usp_RefreshRollups", connection)
             {
                 CommandType = CommandType.StoredProcedure,
+                // Background maintenance can legitimately outlast the request-path timeout.
+                CommandTimeout = MaintenanceCommandTimeoutSeconds,
             };
             command.Parameters.AddWithValue("@MaxBuckets", MaxBucketsPerRun);
             refreshed = (int)(await command.ExecuteScalarAsync(cancellationToken))!;

@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { reportError } from '../api/errorReporting'
 
 interface Props {
   fallback: (error: Error, reset: () => void) => ReactNode
@@ -22,6 +23,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('View failed to render', error, info.componentStack)
+    reportError(error, 'ErrorBoundary')
   }
 
   reset = () => this.setState({ error: null })

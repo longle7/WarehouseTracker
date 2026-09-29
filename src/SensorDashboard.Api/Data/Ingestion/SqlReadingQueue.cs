@@ -19,20 +19,45 @@ public sealed class SqlReadingQueue(SqlConnectionFactory connections, IOptions<I
     // Wakes the local consumer as soon as something is enqueued on this instance.
     private readonly SemaphoreSlim _enqueued = new(0, int.MaxValue);
 
-    public async Task<long> EnqueueAsync(IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken)
+    /// <summary>
+    /// Enqueues a batch. With an <paramref name="idempotencyKey"/>, a repeat of the same request
+    /// (a client retry) returns the original batch instead of queuing it again.
+    /// </summary>
+    public async Task<(long BatchId, bool Replayed)> EnqueueAsync(
+        IReadOnlyList<SensorReadingDto> readings, string? idempotencyKey, CancellationToken cancellationToken)
     {
         await using var connection = connections.Create();
-        var id = await connection.ExecuteScalarAsync<long>(new CommandDefinition(
+        var result = await connection.QuerySingleAsync<(long BatchId, bool Replayed)>(new CommandDefinition(
             """
+            SET XACT_ABORT ON;
+            BEGIN TRAN;
+            DECLARE @existing bigint =
+                (SELECT BatchId FROM ingest.IdempotencyKeys WITH (UPDLOCK, HOLDLOCK) WHERE @Key IS NOT NULL AND [Key] = @Key);
+            IF @existing IS NOT NULL
+            BEGIN
+                COMMIT;
+                SELECT @existing AS BatchId, CAST(1 AS bit) AS Replayed;
+                RETURN;
+            END;
+            DECLARE @new TABLE (Id bigint);
             INSERT ingest.ReadingBatches (ReadingCount, Payload)
-            OUTPUT inserted.Id
+            OUTPUT inserted.Id INTO @new
             VALUES (@Count, @Payload);
+            IF @Key IS NOT NULL
+                INSERT ingest.IdempotencyKeys ([Key], BatchId) SELECT @Key, Id FROM @new;
+            COMMIT;
+            SELECT Id AS BatchId, CAST(0 AS bit) AS Replayed FROM @new;
             """,
-            new { Count = readings.Count, Payload = JsonSerializer.Serialize(readings, ContractJson.Options) },
+            new
+            {
+                Key = idempotencyKey,
+                Count = readings.Count,
+                Payload = JsonSerializer.Serialize(readings, ContractJson.Options),
+            },
             cancellationToken: cancellationToken));
 
-        _enqueued.Release();
-        return id;
+        if (!result.Replayed) _enqueued.Release();
+        return result;
     }
 
     public Task WaitForWorkAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
@@ -138,13 +163,24 @@ public sealed class SqlReadingQueue(SqlConnectionFactory connections, IOptions<I
             row.CompletedAt is { } done ? done.AsUtc() : null);
     }
 
-    /// <summary>Deletes processed-batch results past retention, a chunk at a time.</summary>
-    public async Task<int> TrimBatchResultsAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Deletes processed-batch results and idempotency keys past retention, a chunk at a time.
+    /// Keys only need to outlive any client retry, so a day is plenty.
+    /// </summary>
+    public async Task TrimHistoryAsync(CancellationToken cancellationToken)
     {
+        var now = timeProvider.GetUtcNow();
         await using var connection = connections.Create();
-        return await connection.ExecuteAsync(new CommandDefinition(
-            "DELETE TOP (10000) FROM ingest.BatchResults WHERE ProcessedAt < @Cutoff;",
-            new { Cutoff = (timeProvider.GetUtcNow() - options.Value.BatchResultRetention).UtcDateTime },
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            DELETE TOP (10000) FROM ingest.BatchResults WHERE ProcessedAt < @ResultCutoff;
+            DELETE TOP (10000) FROM ingest.IdempotencyKeys WHERE CreatedAt < @KeyCutoff;
+            """,
+            new
+            {
+                ResultCutoff = (now - options.Value.BatchResultRetention).UtcDateTime,
+                KeyCutoff = (now - TimeSpan.FromDays(1)).UtcDateTime,
+            },
             cancellationToken: cancellationToken));
     }
 

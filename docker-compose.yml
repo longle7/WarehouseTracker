@@ -97,5 +97,27 @@ services:
     restart: unless-stopped
     logging: *logging
 
+  # Outside-in uptime probe: checks the API and dashboard every 15 s from outside the API
+  # process and logs each UP/DOWN change (`docker compose logs uptime-probe`), so an outage is
+  # recorded even when the API itself can't record anything.
+  uptime-probe:
+    image: curlimages/curl:8.11.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        api=; dash=
+        while true; do
+          s=$$(curl -fsS -m 5 -o /dev/null http://api:8080/health 2>/dev/null && echo UP || echo DOWN)
+          if [ "$$s" != "$$api" ]; then echo "$$(date -u +%Y-%m-%dT%H:%M:%SZ) api $$s"; api=$$s; fi
+          s=$$(curl -fsS -m 5 -o /dev/null http://dashboard/ 2>/dev/null && echo UP || echo DOWN)
+          if [ "$$s" != "$$dash" ]; then echo "$$(date -u +%Y-%m-%dT%H:%M:%SZ) dashboard $$s"; dash=$$s; fi
+          sleep 15
+        done
+    depends_on:
+      - api
+      - dashboard
+    restart: unless-stopped
+    logging: *logging
+
 volumes:
   sqldata:

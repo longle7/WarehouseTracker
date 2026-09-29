@@ -1,8 +1,6 @@
 using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using IoTDigitalTwin.Contracts;
 using IoTDigitalTwin.Contracts.Metadata;
-using SensorSimulator.Publishing;
 
 namespace SensorSimulator.Topology;
 
@@ -28,22 +26,17 @@ public enum TopologySourceKind
 /// </summary>
 public sealed class ApiTopologySource(IHttpClientFactory httpClientFactory) : ITopologySource
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
-    {
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
-
     public async Task<IReadOnlyList<Warehouse>> LoadAsync(CancellationToken cancellationToken)
     {
-        var client = httpClientFactory.CreateClient(HttpReadingPublisher.HttpClientName);
-        var warehouses = await client.GetFromJsonAsync<List<WarehouseDto>>("/warehouses", Json, cancellationToken)
+        var client = httpClientFactory.CreateClient(DashboardApiClient.Name);
+        var warehouses = await client.GetFromJsonAsync<List<WarehouseDto>>("/warehouses", ContractJson.Options, cancellationToken)
             ?? throw new InvalidOperationException("The API returned no warehouses.");
 
         var result = new List<Warehouse>(warehouses.Count);
         foreach (var warehouse in warehouses)
         {
             var sensors = await client.GetFromJsonAsync<List<SensorDto>>(
-                $"/warehouses/{Uri.EscapeDataString(warehouse.Id)}/sensors", Json, cancellationToken) ?? [];
+                $"/warehouses/{Uri.EscapeDataString(warehouse.Id)}/sensors", ContractJson.Options, cancellationToken) ?? [];
             var active = sensors
                 .Where(s => s.IsActive)
                 .Select(s => new Sensor(s.Id, s.WarehouseId, s.Location))

@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { useLiveSubscription } from '../api/live'
-import { useSensorProperties, useSensors, useWarehouses } from '../api/queries'
-import { formatAgo, formatPercent, formatTemp } from '../components/format'
+import { useSensorProperties, useSensors, useWarehouse } from '../api/queries'
+import { formatAgo, formatDoor, formatPercent, formatTemp } from '../components/format'
 import { QueryState } from '../components/QueryState'
 import { SensorCharts } from '../components/SensorCharts'
 import { StatusBadge } from '../components/StatusBadge'
@@ -22,7 +22,7 @@ export function SensorPage() {
   // Sensor metadata and live status come from the (cached) sensor list for its warehouse.
   const sensorsQuery = useSensors(warehouseId)
   const sensor = sensorsQuery.data?.find((s) => s.id === sensorId)
-  const warehouse = useWarehouses().data?.find((w) => w.id === warehouseId)
+  const warehouse = useWarehouse(warehouseId)
   const propertiesQuery = useSensorProperties(sensorId, windowMinutes)
   // Warehouse group keeps this sensor's status live; sensor group triggers chart refreshes.
   useLiveSubscription('warehouse', warehouseId)
@@ -62,7 +62,7 @@ export function SensorPage() {
       <div className="stats">
         <Stat label="Temperature" value={r ? formatTemp(r.temperature) : '—'} />
         <Stat label="Humidity" value={r ? formatPercent(r.humidity, 1) : '—'} />
-        <Stat label="Door" value={r ? (r.doorOpen ? 'Open' : 'Closed') : '—'} />
+        <Stat label="Door" value={r ? formatDoor(r.doorOpen) : '—'} />
         <Stat label="Last reading" value={r ? formatAgo(r.timestamp) : '—'} />
       </div>
 

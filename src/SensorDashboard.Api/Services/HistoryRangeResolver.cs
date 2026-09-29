@@ -6,7 +6,7 @@ public sealed record HistoryRange(DateTimeOffset From, DateTimeOffset To, TimeSp
 public static class HistoryRangeResolver
 {
     // Bucket sizes a chart axis reads naturally.
-    public static readonly IReadOnlyList<TimeSpan> NiceBuckets =
+    private static readonly TimeSpan[] NiceBuckets =
     [
         .. new[] { 1, 5, 10, 15, 30 }.Select(s => TimeSpan.FromSeconds(s)),
         .. new[] { 1, 5, 10, 15, 30 }.Select(m => TimeSpan.FromMinutes(m)),

@@ -21,7 +21,7 @@ builder.Services.AddSingleton<ITopologySource>(sp =>
 
 // Standard pipeline (Polly v8): rate limiter, total timeout, retry with exponential
 // backoff + jitter, circuit breaker, per-attempt timeout.
-builder.Services.AddHttpClient(HttpReadingPublisher.HttpClientName, (sp, client) =>
+builder.Services.AddHttpClient(DashboardApiClient.Name, (sp, client) =>
         client.BaseAddress = new Uri(sp.GetRequiredService<IOptions<SimulatorOptions>>().Value.IngestBaseUrl))
     .AddStandardResilienceHandler(o =>
     {

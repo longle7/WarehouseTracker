@@ -1,6 +1,7 @@
 using System.Data;
 using System.Text.Json;
 using Dapper;
+using IoTDigitalTwin.Contracts;
 using IoTDigitalTwin.Contracts.Telemetry;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
@@ -13,23 +14,21 @@ namespace SensorDashboard.Api.Data.Ingestion;
 /// dequeue shares a transaction with the reading insert, so a batch is removed from the
 /// queue if and only if its readings are stored.
 /// </summary>
-public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionOptions> options, TimeProvider timeProvider)
+public sealed class SqlReadingQueue(SqlConnectionFactory connections, IOptions<IngestionOptions> options, TimeProvider timeProvider)
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-
     // Wakes the local consumer as soon as something is enqueued on this instance.
     private readonly SemaphoreSlim _enqueued = new(0, int.MaxValue);
 
     public async Task<long> EnqueueAsync(IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         var id = await connection.ExecuteScalarAsync<long>(new CommandDefinition(
             """
             INSERT ingest.ReadingBatches (ReadingCount, Payload)
             OUTPUT inserted.Id
             VALUES (@Count, @Payload);
             """,
-            new { Count = readings.Count, Payload = JsonSerializer.Serialize(readings, Json) },
+            new { Count = readings.Count, Payload = JsonSerializer.Serialize(readings, ContractJson.Options) },
             cancellationToken: cancellationToken));
 
         _enqueued.Release();
@@ -41,7 +40,7 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
 
     public async Task<int> GetDepthAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         return await connection.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM ingest.ReadingBatches;", cancellationToken: cancellationToken));
     }
@@ -67,7 +66,7 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
             transaction: transaction,
             cancellationToken: cancellationToken));
 
-        return row is null ? null : new QueuedBatch(row.Id, row.Attempts, row.Payload, AsUtc(row.EnqueuedAt));
+        return row is null ? null : new QueuedBatch(row.Id, row.Attempts, row.Payload, row.EnqueuedAt.AsUtc());
     }
 
     /// <summary>Records a processed batch's outcome inside the processing transaction.</summary>
@@ -99,7 +98,7 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
     /// <returns>Null if the ID is unknown (or its result has aged out).</returns>
     public async Task<IngestBatchStatusDto?> GetBatchStatusAsync(long id, CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         var row = await connection.QuerySingleOrDefaultAsync<BatchStatusRow>(new CommandDefinition(
             """
             SELECT 'processed' AS Status, Attempts, Received, Inserted, Duplicates, Rejected,
@@ -135,14 +134,14 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
             row.Received,
             result,
             row.LastError,
-            status == IngestBatchStatus.Retrying && row.NextAttemptAt is { } next ? AsUtc(next) : null,
-            row.CompletedAt is { } done ? AsUtc(done) : null);
+            status == IngestBatchStatus.Retrying && row.NextAttemptAt is { } next ? next.AsUtc() : null,
+            row.CompletedAt is { } done ? done.AsUtc() : null);
     }
 
     /// <summary>Deletes processed-batch results past retention, a chunk at a time.</summary>
     public async Task<int> TrimBatchResultsAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         return await connection.ExecuteAsync(new CommandDefinition(
             "DELETE TOP (10000) FROM ingest.BatchResults WHERE ProcessedAt < @Cutoff;",
             new { Cutoff = (timeProvider.GetUtcNow() - options.Value.BatchResultRetention).UtcDateTime },
@@ -150,7 +149,7 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
     }
 
     public static IReadOnlyList<SensorReadingDto> Deserialize(QueuedBatch batch) =>
-        JsonSerializer.Deserialize<List<SensorReadingDto>>(batch.Payload, Json)
+        JsonSerializer.Deserialize<List<SensorReadingDto>>(batch.Payload, ContractJson.Options)
         ?? throw new JsonException("Batch payload is null.");
 
     /// <summary>
@@ -165,7 +164,7 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
         var deadLetter = poison || attempts >= options.Value.MaxAttempts;
         error = error.Length > 2000 ? error[..2000] : error;
 
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         if (deadLetter)
         {
             var moved = await connection.ExecuteAsync(new CommandDefinition(
@@ -200,7 +199,7 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
 
     public async Task<(int Depth, double? OldestAgeSeconds, int DeadLetters)> GetStatsAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         var row = await connection.QuerySingleAsync<(int Depth, DateTime? Oldest, int DeadLetters)>(new CommandDefinition(
             """
             SELECT (SELECT COUNT(*) FROM ingest.ReadingBatches),
@@ -208,13 +207,13 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
                    (SELECT COUNT(*) FROM ingest.DeadLetters);
             """,
             cancellationToken: cancellationToken));
-        double? age = row.Oldest is { } oldest ? (timeProvider.GetUtcNow() - AsUtc(oldest)).TotalSeconds : null;
+        double? age = row.Oldest is { } oldest ? (timeProvider.GetUtcNow() - oldest.AsUtc()).TotalSeconds : null;
         return (row.Depth, age, row.DeadLetters);
     }
 
     public async Task<IReadOnlyList<DeadLetterDto>> ListDeadLettersAsync(int limit, CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         var rows = await connection.QueryAsync<DeadLetterRow>(new CommandDefinition(
             """
             SELECT TOP (@Limit) Id, BatchId, EnqueuedAt, DeadLetteredAt, Attempts, ReadingCount, Error
@@ -223,14 +222,14 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
             new { Limit = limit },
             cancellationToken: cancellationToken));
         return rows.Select(r => new DeadLetterDto(
-            r.Id, r.BatchId, AsUtc(r.EnqueuedAt), AsUtc(r.DeadLetteredAt), r.Attempts, r.ReadingCount, r.Error)).ToList();
+            r.Id, r.BatchId, r.EnqueuedAt.AsUtc(), r.DeadLetteredAt.AsUtc(), r.Attempts, r.ReadingCount, r.Error)).ToList();
     }
 
     /// <summary>Moves a dead letter back onto the queue with a fresh attempt budget.</summary>
     /// <returns>The new batch ID, or null if no such dead letter exists.</returns>
     public async Task<long?> ReplayDeadLetterAsync(long id, CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         var batchId = await connection.ExecuteScalarAsync<long?>(new CommandDefinition(
             """
             SET XACT_ABORT ON;
@@ -250,8 +249,6 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
         return batchId;
     }
 
-    // Stored as UTC datetime2; Dapper hands them back with Kind = Unspecified.
-    private static DateTimeOffset AsUtc(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Utc));
 
     private sealed record QueuedRow(long Id, int Attempts, string Payload, DateTime EnqueuedAt);
 

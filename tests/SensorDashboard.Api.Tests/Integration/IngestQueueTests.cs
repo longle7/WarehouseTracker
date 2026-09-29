@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using IoTDigitalTwin.Contracts;
 using IoTDigitalTwin.Contracts.Telemetry;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -16,7 +15,7 @@ namespace SensorDashboard.Api.Tests.Integration;
 public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
 {
     private readonly SqlReadingQueue _queue = new(
-        db.ConnectionString, Options.Create(new IngestionOptions { MaxAttempts = 3 }), TimeProvider.System);
+        db.Connections, Options.Create(new IngestionOptions { MaxAttempts = 3 }), TimeProvider.System);
 
     public async Task InitializeAsync()
     {
@@ -37,7 +36,7 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         var accepted = await response.Content.ReadFromJsonAsync<IngestAcceptedDto>();
         Assert.Equal(2, accepted!.Received);
-        await WaitUntilAsync(async () => await db.ScalarAsync<int>("SELECT COUNT(*) FROM telemetry.SensorReadings") == 2);
+        await Eventually.Until(async () => await db.ScalarAsync<int>("SELECT COUNT(*) FROM telemetry.SensorReadings") == 2);
         Assert.Equal(0, await db.ScalarAsync<int>("SELECT COUNT(*) FROM ingest.ReadingBatches"));
 
         var stats = await client.GetFromJsonAsync<IngestStatsDto>("/ingest/stats");
@@ -143,17 +142,12 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
         await using var factory = new ApiFactory(db.ConnectionString);
         var client = factory.CreateClient();
 
-        await WaitUntilAsync(async () => await db.ScalarAsync<int>("SELECT COUNT(*) FROM ingest.DeadLetters") == 1);
+        await Eventually.Until(async () => await db.ScalarAsync<int>("SELECT COUNT(*) FROM ingest.DeadLetters") == 1);
 
         var deadLetter = Assert.Single((await client.GetFromJsonAsync<List<DeadLetterDto>>("/ingest/dead-letters"))!);
         Assert.Equal(1, deadLetter.Attempts);
         Assert.Equal(0, await db.ScalarAsync<int>("SELECT COUNT(*) FROM ingest.ReadingBatches"));
     }
-
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
-    {
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
 
     [Fact]
     public async Task Accepted_response_links_to_a_status_that_reports_the_outcome()
@@ -171,9 +165,9 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
 
         Assert.Equal($"/ingest/batches/{accepted!.BatchId}", response.Headers.Location!.AbsolutePath);
         IngestBatchStatusDto? status = null;
-        await WaitUntilAsync(async () =>
+        await Eventually.Until(async () =>
         {
-            status = await client.GetFromJsonAsync<IngestBatchStatusDto>(response.Headers.Location, Json);
+            status = await client.GetFromJsonAsync<IngestBatchStatusDto>(response.Headers.Location, ContractJson.Options);
             return status!.Status == IngestBatchStatus.Processed;
         });
         Assert.Equal(new IngestResultDto(Received: 3, Inserted: 2, Duplicates: 0, Rejected: 1), status!.Result);
@@ -207,13 +201,4 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync("/ingest/batches/987654321")).StatusCode);
     }
 
-    private static async Task WaitUntilAsync(Func<Task<bool>> condition, int timeoutSeconds = 15)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
-        while (!await condition())
-        {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("Condition not met in time.");
-            await Task.Delay(100);
-        }
-    }
 }

@@ -1,48 +1,27 @@
 using System.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
+using SensorDashboard.Api.Services;
 
 namespace SensorDashboard.Api.Data.Telemetry;
 
 /// <summary>
 /// Sliding-window maintenance for telemetry.SensorReadings: keeps daily partitions created
 /// ahead of incoming data and drops partitions past retention. The work itself lives in
-/// telemetry.usp_MaintainReadingPartitions (TelemetryStore migration).
+/// telemetry.usp_MaintainReadingPartitions (TelemetryStore migration). A missed run is
+/// harmless while PartitionDaysAhead > 0.
 /// </summary>
 public sealed class PartitionMaintenanceService(
-    string connectionString,
+    SqlConnectionFactory connections,
     IOptions<TelemetryOptions> options,
     TimeProvider timeProvider,
-    ILogger<PartitionMaintenanceService> logger) : BackgroundService
+    ILogger<PartitionMaintenanceService> logger) : PeriodicBackgroundService(timeProvider, logger)
 {
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override TimeSpan Interval => options.Value.MaintenanceInterval;
+
+    protected override async Task RunOnceAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(options.Value.MaintenanceInterval, timeProvider);
-
-        do
-        {
-            try
-            {
-                await RunOnceAsync(stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                // Missing one run is harmless while PartitionDaysAhead > 0; try again next interval.
-                logger.LogError(ex, "Reading partition maintenance failed");
-            }
-        }
-        while (await timer.WaitForNextTickAsync(stoppingToken));
-    }
-
-    private async Task RunOnceAsync(CancellationToken cancellationToken)
-    {
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
-
+        await using var connection = await connections.OpenAsync(cancellationToken);
         await using var command = new SqlCommand("telemetry.usp_MaintainReadingPartitions", connection)
         {
             CommandType = CommandType.StoredProcedure,

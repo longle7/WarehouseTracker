@@ -7,18 +7,16 @@ namespace SensorSimulator.Publishing;
 
 /// <summary>
 /// POSTs each tick's batch to the API's ingestion endpoint. Retries, timeouts and the
-/// circuit breaker come from the resilience handler on the named client (see Program.cs).
+/// circuit breaker come from the resilience handler on the DashboardApi client (see Program.cs).
 /// </summary>
 public sealed class HttpReadingPublisher(IHttpClientFactory httpClientFactory, IOptions<SimulatorOptions> options)
     : IReadingPublisher
 {
-    public const string HttpClientName = "Ingest";
-
     public async Task PublishAsync(IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken)
     {
         // Create per call rather than holding one HttpClient in this singleton, so the
         // factory can rotate handlers (DNS changes, connection lifetime).
-        var client = httpClientFactory.CreateClient(HttpClientName);
+        var client = httpClientFactory.CreateClient(DashboardApiClient.Name);
         using var response = await client.PostAsJsonAsync(options.Value.IngestPath, readings, cancellationToken);
         response.EnsureSuccessStatusCode();
     }

@@ -1,11 +1,12 @@
 import { lazy, Suspense } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useLiveSubscription } from '../api/live'
-import { useSensors, useWarehouses, useWarehouseScene } from '../api/queries'
+import { useSensors, useWarehouse, useWarehouseScene } from '../api/queries'
 import type { Sensor } from '../api/types'
-import { formatAgo, formatPercent, formatTemp } from '../components/format'
+import { formatAgo, formatDoor, formatPercent, formatTemp } from '../components/format'
 import { QueryState } from '../components/QueryState'
 import { Stat } from '../components/Stat'
+import { isOutOfRange } from '../components/status'
 import { StatusBadge } from '../components/StatusBadge'
 import { UnitDetailPanel } from '../components/twin/UnitDetailPanel'
 
@@ -23,8 +24,7 @@ export function WarehousePage() {
   const sensorsQuery = useSensors(warehouseId)
   const sceneQuery = useWarehouseScene(warehouseId, view === '3d')
   useLiveSubscription('warehouse', warehouseId)
-  // Shares the cached, live warehouse list with the overview page.
-  const warehouse = useWarehouses().data?.find((w) => w.id === warehouseId)
+  const warehouse = useWarehouse(warehouseId)
 
   const update = (changes: Record<string, string | null>) =>
     setParams(
@@ -129,7 +129,7 @@ function SensorTable({ warehouseId, sensors }: { warehouseId: string; sensors: S
           <tbody>
             {sensors.map((s) => {
               const r = s.lastReading
-              const outOfRange = r && (r.temperature < s.minTemperatureF || r.temperature > s.maxTemperatureF)
+              const outOfRange = r && isOutOfRange(s, r.temperature)
               const href = `/warehouses/${warehouseId}/sensors/${s.id}`
               return (
                 <tr key={s.id} className="clickable" onClick={() => navigate(href)}>
@@ -141,7 +141,7 @@ function SensorTable({ warehouseId, sensors }: { warehouseId: string; sensors: S
                   <td className={`num ${outOfRange ? 'out-of-range' : ''}`}>{r ? formatTemp(r.temperature) : '—'}</td>
                   <td className="num muted">{s.minTemperatureF}–{s.maxTemperatureF}°F</td>
                   <td className="num">{r ? formatPercent(r.humidity, 1) : '—'}</td>
-                  <td>{r ? (r.doorOpen ? 'Open' : 'Closed') : '—'}</td>
+                  <td>{r ? formatDoor(r.doorOpen) : '—'}</td>
                   <td className="muted">{r ? formatAgo(r.timestamp) : 'No data (24h)'}</td>
                 </tr>
               )

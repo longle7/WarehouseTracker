@@ -9,7 +9,7 @@ namespace SensorDashboard.Api.Data.Telemetry;
 /// Dapper queries against telemetry.SensorReadings. Every query filters on [Timestamp] so
 /// SQL Server only touches the relevant daily partitions.
 /// </summary>
-public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
+public sealed class SqlReadingQueries(SqlConnectionFactory connections) : IReadingQueries
 {
     // One TOP (1) seek per sensor on UX_SensorReadings_SensorId_Timestamp. The CAST keeps the
     // predicate sargable against the varchar(32) key.
@@ -112,13 +112,13 @@ public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
         parameters.Add("SensorIds", JsonSerializer.Serialize(sensorIds), DbType.String);
         parameters.Add("Since", since.UtcDateTime, DbType.DateTime2);
 
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         var rows = await connection.QueryAsync<LatestRow>(
             new CommandDefinition(LatestSql, parameters, cancellationToken: cancellationToken));
 
         return rows.ToDictionary(
             r => r.SensorId,
-            r => new LatestReading(r.SensorId, AsUtc(r.Timestamp), (double)r.Temperature, (double)r.Humidity, r.DoorOpen, r.IsAnomaly));
+            r => new LatestReading(r.SensorId, r.Timestamp.AsUtc(), (double)r.Temperature, (double)r.Humidity, r.DoorOpen, r.IsAnomaly));
     }
 
     public async Task<IReadOnlyDictionary<string, ConditionStreaks>> GetConditionStreaksAsync(
@@ -133,16 +133,16 @@ public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
         parameters.Add("Sensors", JsonSerializer.Serialize(sensors.Select(s => new { s.SensorId, MinT = s.MinTemperatureF, MaxT = s.MaxTemperatureF })), DbType.String);
         parameters.Add("Since", since.UtcDateTime, DbType.DateTime2);
 
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         var rows = await connection.QueryAsync<StreakRow>(
             new CommandDefinition(StreaksSql, parameters, cancellationToken: cancellationToken));
 
         return rows.ToDictionary(r => r.SensorId, r => new ConditionStreaks(
-            r.LastReadingAt is { } last ? AsUtc(last) : null,
-            r.TemperatureSince is { } ts ? AsUtc(ts) : null,
+            r.LastReadingAt is { } last ? last.AsUtc() : null,
+            r.TemperatureSince is { } ts ? ts.AsUtc() : null,
             (double?)r.StreakMin,
             (double?)r.StreakMax,
-            r.DoorSince is { } ds ? AsUtc(ds) : null));
+            r.DoorSince is { } ds ? ds.AsUtc() : null));
     }
 
     /// <summary>
@@ -160,12 +160,12 @@ public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
         parameters.Add("To", to.UtcDateTime, DbType.DateTime2);
         parameters.Add("BucketSeconds", (int)bucket.TotalSeconds, DbType.Int32);
 
-        await using var connection = new SqlConnection(connectionString);
+        await using var connection = connections.Create();
         var rows = await connection.QueryAsync<HistoryRow>(new CommandDefinition(
             UsesRollups(bucket) ? RollupHistorySql : HistorySql, parameters, cancellationToken: cancellationToken));
 
         return rows.Select(r => new ReadingBucket(
-            AsUtc(r.BucketStart),
+            r.BucketStart.AsUtc(),
             r.ReadingCount,
             r.AvgTemperature,
             (double)r.MinTemperature,
@@ -175,11 +175,9 @@ public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
             (double)r.MaxHumidity,
             r.DoorOpenRatio,
             r.AnomalyCount,
-            r.LastReadingAt is { } last ? AsUtc(last) : null)).ToList();
+            r.LastReadingAt is { } last ? last.AsUtc() : null)).ToList();
     }
 
-    // Timestamps are stored as UTC datetime2; Dapper hands them back with Kind = Unspecified.
-    private static DateTimeOffset AsUtc(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Utc));
 
     private sealed record LatestRow(
         string SensorId, DateTime Timestamp, decimal Temperature, decimal Humidity, bool DoorOpen, bool IsAnomaly);

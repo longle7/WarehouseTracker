@@ -3,7 +3,8 @@ import { Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, YAxis } f
 import { useLiveSubscription } from '../../api/live'
 import { useAlerts, useSensorProperties } from '../../api/queries'
 import type { SceneUnit, Sensor, UnitType } from '../../api/types'
-import { formatAgo, formatPercent, formatTemp, formatTime } from '../format'
+import { formatAgo, formatDoor, formatPercent, formatTemp, formatTime } from '../format'
+import { isOutOfRange } from '../status'
 import { AcknowledgeButton, SeverityBadge } from '../alerts'
 import { ALERT_KIND_LABEL, formatDuration, useAcknowledgeAs } from '../alertUtils'
 import { StatusBadge } from '../StatusBadge'
@@ -54,7 +55,7 @@ export function UnitDetailPanel({ warehouseId, units, sensors, selectedId, onSel
   }
 
   const r = sensor?.lastReading
-  const outOfRange = sensor && r && (r.temperature < sensor.minTemperatureF || r.temperature > sensor.maxTemperatureF)
+  const outOfRange = sensor && r && isOutOfRange(sensor, r.temperature)
 
   return (
     <aside className="card twin-panel">
@@ -82,7 +83,7 @@ export function UnitDetailPanel({ warehouseId, units, sensors, selectedId, onSel
         </div>
         <div>
           <dt>Door</dt>
-          <dd>{r ? (r.doorOpen ? 'Open' : 'Closed') : '—'}</dd>
+          <dd>{r ? formatDoor(r.doorOpen) : '—'}</dd>
         </div>
         <div>
           <dt>Last reading</dt>

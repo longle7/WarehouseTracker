@@ -1,7 +1,5 @@
 using System.Net.Http.Json;
 using IoTDigitalTwin.Contracts.Telemetry;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using SensorDashboard.Api.Data.Telemetry;
 using static SensorDashboard.Api.Tests.Integration.TestData;
 
@@ -10,10 +8,9 @@ namespace SensorDashboard.Api.Tests.Integration;
 [Collection(SqlServerCollection.Name)]
 public class RollupTests(SqlServerFixture db) : IAsyncLifetime
 {
-    private readonly SqlReadingWriter _writer = new(db.ConnectionString);
-    private readonly SqlReadingQueries _queries = new(db.ConnectionString);
-    private readonly RollupService _rollups = new(
-        db.ConnectionString, Options.Create(new TelemetryOptions()), TimeProvider.System, NullLogger<RollupService>.Instance);
+    private readonly SqlReadingWriter _writer = new(db.Connections);
+    private readonly SqlReadingQueries _queries = new(db.Connections);
+    private readonly RollupService _rollups = db.CreateRollupService();
 
     public Task InitializeAsync() => db.ResetTelemetryAsync();
 

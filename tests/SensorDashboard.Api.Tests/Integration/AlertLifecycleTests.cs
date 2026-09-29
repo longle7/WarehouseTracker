@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using IoTDigitalTwin.Contracts;
 using IoTDigitalTwin.Contracts.Alerts;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -13,11 +12,6 @@ namespace SensorDashboard.Api.Tests.Integration;
 [Collection(SqlServerCollection.Name)]
 public class AlertLifecycleTests(SqlServerFixture db) : IAsyncLifetime
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
-    {
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
-
     public async Task InitializeAsync()
     {
         await db.ResetTelemetryAsync();
@@ -30,7 +24,7 @@ public class AlertLifecycleTests(SqlServerFixture db) : IAsyncLifetime
     public async Task Streak_query_finds_when_the_current_excursion_began()
     {
         var now = Now();
-        await new SqlReadingWriter(db.ConnectionString).WriteAsync(
+        await new SqlReadingWriter(db.Connections).WriteAsync(
         [
             Reading(SeaDairy, now.AddSeconds(-30), temperature: 37),
             Reading(SeaDairy, now.AddSeconds(-20), temperature: 43, doorOpen: true),
@@ -39,7 +33,7 @@ public class AlertLifecycleTests(SqlServerFixture db) : IAsyncLifetime
             Reading(SeaProduce, now, temperature: 37),
         ], default);
 
-        var streaks = await new SqlReadingQueries(db.ConnectionString).GetConditionStreaksAsync(
+        var streaks = await new SqlReadingQueries(db.Connections).GetConditionStreaksAsync(
             [new(SeaDairy, 34, 40), new(SeaProduce, 34, 40)], now.AddHours(-1), default);
 
         var dairy = streaks[SeaDairy];
@@ -67,7 +61,7 @@ public class AlertLifecycleTests(SqlServerFixture db) : IAsyncLifetime
         Assert.Equal("Dairy Cooler", alert.Location);
 
         var ack = await client.PostAsJsonAsync($"/alerts/{alert.Id}/acknowledge", new AcknowledgeAlertDto("Sam"));
-        var acknowledged = await ack.Content.ReadFromJsonAsync<AlertDto>(Json);
+        var acknowledged = await ack.Content.ReadFromJsonAsync<AlertDto>(ContractJson.Options);
         Assert.Equal((AlertState.Acknowledged, "Sam"), (acknowledged!.State, acknowledged.AcknowledgedBy));
 
         // Back in range: resolved, and acknowledging it now conflicts.
@@ -80,13 +74,10 @@ public class AlertLifecycleTests(SqlServerFixture db) : IAsyncLifetime
 
     private static async Task<AlertDto> WaitForAlertAsync(HttpClient client, Func<AlertDto, bool> match, string state = "active")
     {
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (true)
-        {
-            var alerts = await client.GetFromJsonAsync<List<AlertDto>>($"/alerts?state={state}&warehouseId={Seattle}", Json);
-            if (alerts!.FirstOrDefault(match) is { } found) return found;
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("Expected alert did not appear.");
-            await Task.Delay(200);
-        }
+        var alerts = await Eventually.Until(
+            () => client.GetFromJsonAsync<List<AlertDto>>($"/alerts?state={state}&warehouseId={Seattle}", ContractJson.Options),
+            alerts => alerts!.Any(match),
+            TimeSpan.FromSeconds(20));
+        return alerts!.First(match);
     }
 }

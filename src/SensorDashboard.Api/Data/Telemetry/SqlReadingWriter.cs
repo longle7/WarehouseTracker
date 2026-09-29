@@ -10,7 +10,7 @@ namespace SensorDashboard.Api.Data.Telemetry;
 /// batches are absorbed by the database instead of raising key violations. Touched minutes
 /// are marked dirty for the 1-minute rollups in the same batch.
 /// </summary>
-public sealed class SqlReadingWriter(string connectionString) : IReadingWriter
+public sealed class SqlReadingWriter(SqlConnectionFactory connections) : IReadingWriter
 {
     private const string InsertSql = """
         SET NOCOUNT ON;
@@ -39,8 +39,7 @@ public sealed class SqlReadingWriter(string connectionString) : IReadingWriter
 
     public async Task<IngestResultDto> WriteAsync(IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await connections.OpenAsync(cancellationToken);
         return await WriteAsync(connection, null, readings, cancellationToken);
     }
 

@@ -22,3 +22,5 @@ export function formatAgo(value: string, now = Date.now()) {
 export const formatTemp = (value: number) => `${value.toFixed(1)}°F`
 
 export const formatPercent = (value: number, digits = 0) => `${value.toFixed(digits)}%`
+
+export const formatDoor = (doorOpen: boolean) => (doorOpen ? 'Open' : 'Closed')

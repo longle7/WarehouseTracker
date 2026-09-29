@@ -8,8 +8,8 @@ namespace SensorDashboard.Api.Tests.Integration;
 [Collection(SqlServerCollection.Name)]
 public class TelemetryStoreTests(SqlServerFixture db) : IAsyncLifetime
 {
-    private readonly SqlReadingWriter _writer = new(db.ConnectionString);
-    private readonly SqlReadingQueries _queries = new(db.ConnectionString);
+    private readonly SqlReadingWriter _writer = new(db.Connections);
+    private readonly SqlReadingQueries _queries = new(db.Connections);
 
     public Task InitializeAsync() => db.ResetTelemetryAsync();
 
@@ -124,7 +124,7 @@ public class TelemetryStoreTests(SqlServerFixture db) : IAsyncLifetime
             doorOpen: i is 0 or 1 or 2,
             isAnomaly: i >= 12)).ToList();
         await _writer.WriteAsync(readings, default);
-        await Rollups.RefreshAsync(default);
+        await db.CreateRollupService().RefreshAsync(default);
 
         var buckets = await _queries.GetHistoryAsync(SeaDairy, start, start.AddMinutes(2), TimeSpan.FromMinutes(1), default);
 
@@ -147,11 +147,6 @@ public class TelemetryStoreTests(SqlServerFixture db) : IAsyncLifetime
         return new DateTimeOffset(now.Ticks - now.Ticks % TimeSpan.TicksPerMinute, TimeSpan.Zero).AddMinutes(minutesFromNow);
     }
 
-    private RollupService Rollups => new(
-        db.ConnectionString,
-        Microsoft.Extensions.Options.Options.Create(new TelemetryOptions()),
-        TimeProvider.System,
-        Microsoft.Extensions.Logging.Abstractions.NullLogger<RollupService>.Instance);
 
     [Fact]
     public async Task Partition_maintenance_keeps_a_week_of_future_partitions_and_is_idempotent()

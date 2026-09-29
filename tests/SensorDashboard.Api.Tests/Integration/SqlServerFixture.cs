@@ -1,6 +1,9 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using SensorDashboard.Api.Data;
+using SensorDashboard.Api.Data.Telemetry;
 
 namespace SensorDashboard.Api.Tests.Integration;
 
@@ -23,6 +26,11 @@ public sealed class SqlServerFixture : IAsyncLifetime
             InitialCatalog = $"IoTDigitalTwin_Test_{Guid.NewGuid():N}",
         }.ConnectionString;
     }
+
+    public SqlConnectionFactory Connections => new(ConnectionString);
+
+    public RollupService CreateRollupService() =>
+        new(Connections, Options.Create(new TelemetryOptions()), TimeProvider.System, NullLogger<RollupService>.Instance);
 
     public DigitalTwinDbContext CreateDbContext() =>
         new(new DbContextOptionsBuilder<DigitalTwinDbContext>().UseSqlServer(ConnectionString).Options);

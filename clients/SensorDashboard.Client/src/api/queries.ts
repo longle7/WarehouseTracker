@@ -35,6 +35,11 @@ export function useWarehouses() {
   })
 }
 
+/** One warehouse from the shared, live warehouse list (no extra request). */
+export function useWarehouse(warehouseId: string) {
+  return useWarehouses().data?.find((w) => w.id === warehouseId)
+}
+
 export function useSensors(warehouseId: string) {
   return useQuery({
     queryKey: queryKeys.sensors(warehouseId),

@@ -23,37 +23,18 @@ public sealed class AlertEvaluator(
     IOptions<AlertOptions> alertOptions,
     IOptions<DashboardOptions> dashboardOptions,
     TimeProvider timeProvider,
-    ILogger<AlertEvaluator> logger) : BackgroundService
+    ILogger<AlertEvaluator> logger) : PeriodicBackgroundService(timeProvider, logger)
 {
     private readonly DateTimeOffset _watchingSince = timeProvider.GetUtcNow();
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        using var timer = new PeriodicTimer(alertOptions.Value.EvaluationInterval, timeProvider);
-        do
-        {
-            try
-            {
-                await EvaluateOnceAsync(stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Alert evaluation failed; retrying next interval");
-            }
-        }
-        while (await timer.WaitForNextTickAsync(stoppingToken));
-    }
+    protected override TimeSpan Interval => alertOptions.Value.EvaluationInterval;
 
-    internal async Task EvaluateOnceAsync(CancellationToken cancellationToken)
+    protected override async Task RunOnceAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<DigitalTwinDbContext>();
         var options = alertOptions.Value;
-        var now = timeProvider.GetUtcNow();
+        var now = Clock.GetUtcNow();
 
         var sensors = await db.Sensors.AsNoTracking().ToListAsync(cancellationToken);
         var active = await db.Alerts.Where(a => a.ClosedAt == null).ToListAsync(cancellationToken);

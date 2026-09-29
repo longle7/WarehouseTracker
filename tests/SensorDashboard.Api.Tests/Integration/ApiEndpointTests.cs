@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using IoTDigitalTwin.Contracts;
 using IoTDigitalTwin.Contracts.Metadata;
 using IoTDigitalTwin.Contracts.Telemetry;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -14,11 +13,6 @@ namespace SensorDashboard.Api.Tests.Integration;
 [Collection(SqlServerCollection.Name)]
 public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
-    {
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
-
     private readonly ApiFactory _factory = new(db.ConnectionString);
     private HttpClient _client = null!;
 
@@ -41,15 +35,15 @@ public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
         });
         Assert.True(ingest.IsSuccessStatusCode, await ingest.Content.ReadAsStringAsync());
 
-        var sensors = await PollAsync(
-            () => _client.GetFromJsonAsync<List<SensorDto>>("/warehouses/WH-SEA/sensors", Json),
+        var sensors = await Eventually.Until(
+            () => _client.GetFromJsonAsync<List<SensorDto>>("/warehouses/WH-SEA/sensors", ContractJson.Options),
             s => s!.Single(x => x.Id == SeaProduce).Status == SensorStatus.Alert);
         Assert.Equal(SensorStatus.Ok, sensors!.Single(s => s.Id == SeaDairy).Status);
         Assert.Equal(44, sensors!.Single(s => s.Id == SeaProduce).LastReading!.Temperature);
         // Seeded but silent sensors are offline.
         Assert.All(sensors!.Where(s => s.Id is not SeaDairy and not SeaProduce), s => Assert.Equal(SensorStatus.Offline, s.Status));
 
-        var warehouses = await _client.GetFromJsonAsync<List<WarehouseDto>>("/warehouses", Json);
+        var warehouses = await _client.GetFromJsonAsync<List<WarehouseDto>>("/warehouses", ContractJson.Options);
         var seattle = warehouses!.Single(w => w.Id == Seattle);
         Assert.Equal((4, 1, 2), (seattle.SensorCount, seattle.AlertCount, seattle.OfflineCount));
     }
@@ -78,8 +72,8 @@ public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
     {
         await _client.PostAsJsonAsync("/ingest", new[] { Reading(SeaDairy, Now()) });
 
-        var properties = await PollAsync(
-            () => _client.GetFromJsonAsync<List<SensorPropertyDto>>($"/sensors/{SeaDairy}/properties", Json),
+        var properties = await Eventually.Until(
+            () => _client.GetFromJsonAsync<List<SensorPropertyDto>>($"/sensors/{SeaDairy}/properties", ContractJson.Options),
             p => p!.Single(x => x.Name == "temperature").Values.Count > 0);
         var invalid = await _client.GetAsync($"/sensors/{SeaDairy}/properties?bucketSeconds=0");
 
@@ -95,10 +89,10 @@ public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
 
         HttpResponseMessage response = null!;
         List<SensorPropertyDto>? properties = null;
-        await PollAsync(async () =>
+        await Eventually.Until(async () =>
         {
             response = await _client.GetAsync($"/sensors/{SeaDairy}/properties?bucketSeconds=15");
-            properties = await response.Content.ReadFromJsonAsync<List<SensorPropertyDto>>(Json);
+            properties = await response.Content.ReadFromJsonAsync<List<SensorPropertyDto>>(ContractJson.Options);
             return properties!.Single(p => p.Name == "temperature").Values.Sum(v => v.Count);
         }, total => total == 2);
 
@@ -111,7 +105,7 @@ public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
     [Fact]
     public async Task Scene_describes_every_unit_with_dimensions()
     {
-        var scene = await _client.GetFromJsonAsync<WarehouseSceneDto>("/warehouses/WH-SEA/scene", Json);
+        var scene = await _client.GetFromJsonAsync<WarehouseSceneDto>("/warehouses/WH-SEA/scene", ContractJson.Options);
 
         Assert.Equal((40, 25), (scene!.FloorWidth, scene.FloorDepth));
         Assert.Equal(4, scene.Units.Count);
@@ -127,7 +121,7 @@ public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
                 o.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
                 o.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.LongPolling;
             })
-            .AddJsonProtocol(o => o.PayloadSerializerOptions = Json)
+            .AddJsonProtocol(o => o.PayloadSerializerOptions = ContractJson.Options)
             .Build();
 
         var pushed = new TaskCompletionSource<List<SensorDto>>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -143,17 +137,5 @@ public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
 
         var sensors = await pushed.Task.WaitAsync(TimeSpan.FromSeconds(15));
         Assert.Equal(SensorStatus.Ok, sensors.Single(s => s.Id == SeaDairy).Status);
-    }
-
-    /// <summary>Ingestion may be asynchronous; retry a read until it reflects the write.</summary>
-    private static async Task<T> PollAsync<T>(Func<Task<T>> read, Func<T, bool> done, int timeoutSeconds = 15)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
-        while (true)
-        {
-            var value = await read();
-            if (done(value) || DateTime.UtcNow > deadline) return value;
-            await Task.Delay(200);
-        }
     }
 }

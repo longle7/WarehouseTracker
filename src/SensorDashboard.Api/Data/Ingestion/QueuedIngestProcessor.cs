@@ -42,7 +42,7 @@ public sealed class IngestMetrics
 /// leads to reprocessing can't duplicate readings. Safe to run on several instances at once.
 /// </summary>
 public sealed class QueuedIngestProcessor(
-    string connectionString,
+    SqlConnectionFactory connections,
     SqlReadingQueue queue,
     IngestMetrics metrics,
     ILiveUpdateNotifier liveUpdates,
@@ -83,8 +83,7 @@ public sealed class QueuedIngestProcessor(
     /// <returns>True if a batch was taken (processed or failed), false if none was due.</returns>
     internal async Task<bool> ProcessNextAsync(CancellationToken cancellationToken)
     {
-        await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await connections.OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
         var batch = await SqlReadingQueue.DequeueAsync(connection, transaction, cancellationToken);

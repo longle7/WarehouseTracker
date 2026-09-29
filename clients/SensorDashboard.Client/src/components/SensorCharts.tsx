@@ -14,6 +14,7 @@ import {
 import type { ReactNode } from 'react'
 import type { Sensor, SensorHistory, SensorProperty, SensorPropertyName } from '../api/types'
 import { formatDateTime, formatPercent, formatTemp, formatTime } from './format'
+import { isOutOfRange } from './status'
 
 interface Row {
   t: number
@@ -111,6 +112,34 @@ function ChartTooltip({ render }: { render: (row: Row) => ReactNode }) {
   )
 }
 
+/** One small per-bucket bar chart (door-open share, anomaly count), synced with the others. */
+function BarPanel({ title, note, rows, dataKey, fill, yAxis, render }: {
+  title: string
+  note: string
+  rows: ChartRow[]
+  dataKey: 'doorPct' | 'anomalies'
+  fill: string
+  yAxis: { unit?: string; domain?: [number, number]; ticks?: number[]; allowDecimals?: boolean }
+  render: (row: Row) => ReactNode
+}) {
+  return (
+    <section className="card">
+      <div className="card-title"><h2>{title}</h2><span className="chart-note">{note}</span></div>
+      <div className="chart small">
+        <ResponsiveContainer>
+          <BarChart data={rows} syncId={SYNC_ID} margin={margin} barCategoryGap={1}>
+            <CartesianGrid stroke="var(--grid)" vertical={false} />
+            <XAxis dataKey="t" tickFormatter={formatTime} stroke="var(--axis)" tick={tick} minTickGap={48} />
+            <YAxis stroke="var(--axis)" tick={tick} width={48} {...yAxis} />
+            <Bar dataKey={dataKey} fill={fill} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+            <ChartTooltip render={render} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
+  )
+}
+
 /** Marks buckets that contain an anomaly with a status-critical dot ringed in the surface color. */
 function AnomalyDot(props: { cx?: number; cy?: number; index?: number; payload?: ChartRow }) {
   const { cx, cy, index, payload } = props
@@ -194,35 +223,24 @@ export function SensorCharts({ sensor, history }: { sensor: Sensor; history: Sen
         </div>
       </section>
 
-      <section className="card">
-        <div className="card-title"><h2>Door open</h2><span className="chart-note">% of readings per bucket</span></div>
-        <div className="chart small">
-          <ResponsiveContainer>
-            <BarChart data={chartRows} syncId={SYNC_ID} margin={margin} barCategoryGap={1}>
-              <CartesianGrid stroke="var(--grid)" vertical={false} />
-              <XAxis dataKey="t" tickFormatter={formatTime} stroke="var(--axis)" tick={tick} minTickGap={48} />
-              <YAxis stroke="var(--axis)" tick={tick} width={48} unit="%" domain={[0, 100]} ticks={[0, 50, 100]} />
-              <Bar dataKey="doorPct" fill="var(--series-1)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-              <ChartTooltip render={(r) => <div>Door open <strong>{formatPercent(r.doorPct)}</strong></div>} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="card-title"><h2>Anomalies</h2><span className="chart-note">Flagged readings per bucket</span></div>
-        <div className="chart small">
-          <ResponsiveContainer>
-            <BarChart data={chartRows} syncId={SYNC_ID} margin={margin} barCategoryGap={1}>
-              <CartesianGrid stroke="var(--grid)" vertical={false} />
-              <XAxis dataKey="t" tickFormatter={formatTime} stroke="var(--axis)" tick={tick} minTickGap={48} />
-              <YAxis stroke="var(--axis)" tick={tick} width={48} allowDecimals={false} />
-              <Bar dataKey="anomalies" fill="var(--status-critical)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-              <ChartTooltip render={(r) => <div><strong>{r.anomalies}</strong> anomalous reading{r.anomalies === 1 ? '' : 's'}</div>} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </section>
+      <BarPanel
+        title="Door open"
+        note="% of readings per bucket"
+        rows={chartRows}
+        dataKey="doorPct"
+        fill="var(--series-1)"
+        yAxis={{ unit: '%', domain: [0, 100], ticks: [0, 50, 100] }}
+        render={(r) => <div>Door open <strong>{formatPercent(r.doorPct)}</strong></div>}
+      />
+      <BarPanel
+        title="Anomalies"
+        note="Flagged readings per bucket"
+        rows={chartRows}
+        dataKey="anomalies"
+        fill="var(--status-critical)"
+        yAxis={{ allowDecimals: false }}
+        render={(r) => <div><strong>{r.anomalies}</strong> anomalous reading{r.anomalies === 1 ? '' : 's'}</div>}
+      />
 
       <details className="card wide">
         <summary>Show data table ({rows.length} buckets)</summary>
@@ -243,7 +261,7 @@ export function SensorCharts({ sensor, history }: { sensor: Sensor; history: Sen
               {[...rows].reverse().map((r) => (
                 <tr key={r.t}>
                   <td>{formatDateTime(r.t)} {formatTime(r.t)}</td>
-                  <td className={`num ${r.temp < minT || r.temp > maxT ? 'out-of-range' : ''}`}>{formatTemp(r.temp)}</td>
+                  <td className={`num ${isOutOfRange(sensor, r.temp) ? 'out-of-range' : ''}`}>{formatTemp(r.temp)}</td>
                   <td className="num">{formatTemp(r.tempRange[0])}</td>
                   <td className="num">{formatTemp(r.tempRange[1])}</td>
                   <td className="num">{formatPercent(r.humidity, 1)}</td>

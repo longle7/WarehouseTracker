@@ -1,0 +1,78 @@
+# Whole system in one command:  docker compose up --build
+#   Dashboard  http://localhost:8080
+#   API        http://localhost:5278   (/health, /ingest/stats, ...)
+#   SQL Server localhost,14333         (sa / SA_PASSWORD; 14333 avoids a local SQL Server on 1433)
+#
+# SA_PASSWORD defaults to a development-only value; override it in a .env file or the shell.
+
+name: iot-digital-twin
+
+x-connection-string: &connection-string "Server=sqlserver,1433;Database=IoTDigitalTwin;User Id=sa;Password=${SA_PASSWORD:-DevOnly_Passw0rd!};TrustServerCertificate=True"
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD:-DevOnly_Passw0rd!}
+    ports:
+      - "14333:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q 'SELECT 1' -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # Applies EF Core migrations (schema, partitioning, queue, rollups, seed data), then exits.
+  migrate:
+    build:
+      context: .
+      dockerfile: src/SensorDashboard.Api/Dockerfile
+      target: migrator
+    environment:
+      ConnectionStrings__IoTDigitalTwin: *connection-string
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: src/SensorDashboard.Api/Dockerfile
+    environment:
+      ConnectionStrings__IoTDigitalTwin: *connection-string
+      ASPNETCORE_ENVIRONMENT: Production
+    ports:
+      - "5278:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Starts alongside the API; its Polly retries ride out the API's startup.
+  simulator:
+    build:
+      context: .
+      dockerfile: src/SensorSimulator/Dockerfile
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Simulator__IngestBaseUrl: http://api:8080
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  dashboard:
+    build: ./clients/SensorDashboard.Client
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  sqldata:

@@ -72,6 +72,9 @@ builder.Services.AddScoped<AlertService>();
 builder.Services.AddSingleton<IAlertNotificationSink, LoggingAlertNotificationSink>();
 builder.Services.AddHostedService<AlertEvaluator>();
 
+// Readiness for containers and CI: the database answers and is migrated.
+builder.Services.AddHealthChecks().AddCheck("database", new DatabaseHealthCheck(connectionString));
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -85,6 +88,7 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHealthChecks("/health");
 app.MapHub<TelemetryHub>("/hubs/telemetry");
 
 app.Run();

@@ -58,6 +58,29 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Clients_over_the_rate_limit_get_429_with_retry_after()
+    {
+        await using var factory = new ApiFactory(db.ConnectionString).WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Ingestion:RateLimitPerSecond", "1");
+            b.UseSetting("Ingestion:RateLimitBurst", "2");
+        });
+        var client = factory.CreateClient();
+
+        var statuses = new List<HttpStatusCode>();
+        for (var i = 0; i < 4; i++)
+        {
+            statuses.Add((await client.PostAsJsonAsync("/ingest", new[] { Reading(SeaDairy, Now().AddSeconds(i)) })).StatusCode);
+        }
+        var limited = await client.PostAsJsonAsync("/ingest", new[] { Reading(SeaDairy, Now().AddSeconds(9)) });
+
+        Assert.Equal([HttpStatusCode.Accepted, HttpStatusCode.Accepted], statuses.Take(2));
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.True(int.Parse(limited.Headers.GetValues("Retry-After").Single()) >= 1);
+    }
+
+
+    [Fact]
     public async Task Dequeue_is_undone_by_rollback()
     {
         await _queue.EnqueueAsync([Reading(SeaDairy, Now())], default);

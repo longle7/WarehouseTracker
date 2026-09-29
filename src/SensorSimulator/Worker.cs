@@ -8,7 +8,7 @@ namespace SensorSimulator;
 
 public sealed class Worker(
     ITopologySource topologySource,
-    IReadingPublisher publisher,
+    StoreAndForward delivery,
     IOptions<SimulatorOptions> options,
     TimeProvider timeProvider,
     ILoggerFactory loggerFactory,
@@ -25,32 +25,12 @@ public sealed class Worker(
         logger.LogInformation("Simulating {Sensors} sensors in {Warehouses} warehouses; publishing to {BaseUrl}{Path} every {Interval}",
             warehouses.Sum(w => w.Sensors.Count), warehouses.Count, options.Value.IngestBaseUrl, options.Value.IngestPath, interval);
 
-        // If a publish runs longer than the interval (e.g. retries), PeriodicTimer
-        // coalesces the missed ticks instead of queuing a burst.
         using var timer = new PeriodicTimer(interval, timeProvider);
 
         do
         {
-            var readings = generator.NextTick(timeProvider.GetUtcNow());
-            if (readings.Count == 0)
-            {
-                continue;
-            }
-
-            try
-            {
-                await publisher.PublishAsync(readings, stoppingToken);
-                logger.LogDebug("Published {Count} readings", readings.Count);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                // Resilience handler already retried; drop this batch and keep simulating.
-                logger.LogWarning("Failed to publish {Count} readings, dropping batch: {Error}", readings.Count, ex.Message);
-            }
+            // Sampling never waits on the network: delivery happens on StoreAndForward's own loop.
+            delivery.Enqueue(generator.NextTick(timeProvider.GetUtcNow()));
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }

@@ -1,5 +1,6 @@
 using IoTDigitalTwin.Contracts.Telemetry;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using SensorDashboard.Api.Data.Ingestion;
 using SensorDashboard.Api.Data.Telemetry;
@@ -22,10 +23,15 @@ public sealed class IngestController(
 {
     public const int MaxBatchSize = 1000;
 
+    public const int MaxRequestBytes = 1024 * 1024;
+
     [HttpPost]
+    [RequestSizeLimit(MaxRequestBytes)]
+    [EnableRateLimiting(IngestRateLimiting.Policy)]
     [ProducesResponseType<IngestAcceptedDto>(StatusCodes.Status202Accepted)]
     [ProducesResponseType<IngestResultDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Post([FromBody] IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken)
     {

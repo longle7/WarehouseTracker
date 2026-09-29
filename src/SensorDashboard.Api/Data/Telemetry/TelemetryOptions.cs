@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace SensorDashboard.Api.Data.Telemetry;
 
 public sealed class TelemetryOptions
@@ -5,16 +7,21 @@ public sealed class TelemetryOptions
     public const string SectionName = "Telemetry";
 
     /// <summary>How many future daily partitions to keep ready ahead of incoming data.</summary>
+    [Range(1, 60)]
     public int PartitionDaysAhead { get; set; } = 7;
 
     /// <summary>Whole days of readings kept; older partitions are truncated and merged away.</summary>
+    [Range(1, 3650)]
     public int RetentionDays { get; set; } = 30;
 
+    [Range(typeof(TimeSpan), "00:01:00", "1.00:00:00")]
     public TimeSpan MaintenanceInterval { get; set; } = TimeSpan.FromHours(6);
 
     /// <summary>How often dirty minutes are rolled up; also the freshness lag of rollup-backed charts.</summary>
+    [Range(typeof(TimeSpan), "00:00:01", "01:00:00")]
     public TimeSpan RollupRefreshInterval { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>1-minute rollups outlive raw readings, so long-range history keeps working.</summary>
+    [Range(1, 3650)]
     public int RollupRetentionDays { get; set; } = 400;
 }

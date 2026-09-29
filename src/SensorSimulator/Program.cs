@@ -33,6 +33,8 @@ builder.Services.AddHttpClient(DashboardApiClient.Name, (sp, client) =>
         o.Retry.Delay = TimeSpan.FromMilliseconds(500);
     });
 builder.Services.AddSingleton<IReadingPublisher, HttpReadingPublisher>();
+builder.Services.AddSingleton<StoreAndForward>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<StoreAndForward>());
 
 builder.Services.AddHostedService<Worker>();
 

@@ -50,10 +50,12 @@ public sealed class QueuedIngestProcessor(
     ILogger<QueuedIngestProcessor> logger) : BackgroundService
 {
     private static readonly TimeSpan TrimInterval = TimeSpan.FromHours(1);
+    private static readonly TimeSpan MaxOutageBackoff = TimeSpan.FromSeconds(30);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var nextTrim = DateTime.UtcNow;
+        var consecutiveFailures = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -65,6 +67,11 @@ public sealed class QueuedIngestProcessor(
                     await queue.TrimBatchResultsAsync(stoppingToken);
                     nextTrim = DateTime.UtcNow + TrimInterval;
                 }
+                if (consecutiveFailures > 0)
+                {
+                    logger.LogInformation("Ingest queue reachable again after {Failures} failed attempts", consecutiveFailures);
+                    consecutiveFailures = 0;
+                }
                 await queue.WaitForWorkAsync(options.Value.PollInterval, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -73,9 +80,15 @@ public sealed class QueuedIngestProcessor(
             }
             catch (Exception ex)
             {
-                // Database unreachable or similar: nothing was dequeued, so just back off.
-                logger.LogWarning(ex, "Ingest queue unavailable; retrying");
-                await Task.Delay(options.Value.PollInterval, stoppingToken);
+                // Database unreachable or similar: nothing was dequeued, so back off
+                // exponentially (capped) rather than hammering a database that's down.
+                consecutiveFailures++;
+                var delay = TimeSpan.FromTicks(Math.Min(
+                    options.Value.PollInterval.Ticks * (1L << Math.Min(consecutiveFailures, 10)),
+                    MaxOutageBackoff.Ticks));
+                logger.Log(consecutiveFailures == 1 ? LogLevel.Warning : LogLevel.Debug, ex,
+                    "Ingest queue unavailable (attempt {Attempt}); retrying in {Delay}", consecutiveFailures, delay);
+                await Task.Delay(delay, stoppingToken);
             }
         }
     }

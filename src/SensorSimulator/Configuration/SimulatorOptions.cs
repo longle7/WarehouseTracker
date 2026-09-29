@@ -28,6 +28,12 @@ public sealed class SimulatorOptions
 
     public double MaxTemperatureF { get; set; } = 40;
 
+    /// <summary>
+    /// Store-and-forward capacity: batches held while the API is unreachable (including the
+    /// newest). 720 is one hour at the default 5 s interval; the oldest go first when full.
+    /// </summary>
+    public int MaxBufferedBatches { get; set; } = 720;
+
     /// <summary>Set to make a run reproducible; leave null for a random run.</summary>
     public int? RandomSeed { get; set; }
 }
@@ -46,6 +52,8 @@ public sealed class SimulatorOptionsValidator : IValidateOptions<SimulatorOption
             failures.Add($"{nameof(options.AnomalyProbability)} must be between 0 and 1.");
         if (options.MinAnomalyTicks < 1 || options.MaxAnomalyTicks < options.MinAnomalyTicks)
             failures.Add($"Require 1 <= {nameof(options.MinAnomalyTicks)} <= {nameof(options.MaxAnomalyTicks)}.");
+        if (options.MaxBufferedBatches < 1)
+            failures.Add($"{nameof(options.MaxBufferedBatches)} must be at least 1.");
         if (options.MinTemperatureF >= options.MaxTemperatureF)
             failures.Add($"{nameof(options.MinTemperatureF)} must be less than {nameof(options.MaxTemperatureF)}.");
 

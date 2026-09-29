@@ -7,6 +7,13 @@
 
 name: iot-digital-twin
 
+# Rotate container logs so a long-running stack can't fill the disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-connection-string: &connection-string "Server=sqlserver,1433;Database=IoTDigitalTwin;User Id=sa;Password=${SA_PASSWORD:-DevOnly_Passw0rd!};TrustServerCertificate=True"
 
 services:
@@ -16,6 +23,8 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_PID: Developer
       MSSQL_SA_PASSWORD: ${SA_PASSWORD:-DevOnly_Passw0rd!}
+      # Cap SQL Server's memory so it can't starve the other containers.
+      MSSQL_MEMORY_LIMIT_MB: "2048"
     ports:
       - "14333:1433"
     volumes:
@@ -26,6 +35,7 @@ services:
       timeout: 5s
       retries: 30
       start_period: 20s
+    logging: *logging
 
   # Applies EF Core migrations (schema, partitioning, queue, rollups, seed data), then exits.
   migrate:
@@ -39,6 +49,7 @@ services:
       sqlserver:
         condition: service_healthy
     restart: "no"
+    logging: *logging
 
   api:
     build:
@@ -52,9 +63,16 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "dotnet", "SensorDashboard.Api.dll", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
+    logging: *logging
 
-  # Starts alongside the API; its Polly retries ride out the API's startup.
+  # Buffers readings (store-and-forward) whenever the API is unreachable.
   simulator:
     build:
       context: .
@@ -62,9 +80,13 @@ services:
     environment:
       DOTNET_ENVIRONMENT: Production
       Simulator__IngestBaseUrl: http://api:8080
+      Simulator__IntervalSeconds: ${SIM_INTERVAL_SECONDS:-5}
+      Simulator__AnomalyProbability: ${SIM_ANOMALY_PROBABILITY:-0.02}
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
+    logging: *logging
 
   dashboard:
     build: ./clients/SensorDashboard.Client
@@ -73,6 +95,7 @@ services:
     depends_on:
       - api
     restart: unless-stopped
+    logging: *logging
 
 volumes:
   sqldata:

@@ -126,6 +126,15 @@ A sensor's *status* is instantaneous. An *alert* is stored history: `ops.Alerts`
 - *Retention:* rollups are kept for 400 days, well past the 30-day raw retention.
 - *Cost:* rollup-backed charts lag by up to one refresh interval.
 
+**Stability: failures are contained and recovered from.**
+- *No lost readings.* The simulator is store-and-forward, like an IoT edge device. Sampling only adds each batch to a bounded buffer (1 hour by default), and a separate delivery loop sends it oldest-first with exponential backoff. So a slow or unreachable API never stops readings being taken. Batches the API permanently rejects (4xx other than 408/429) are dropped so they can't block the rest.
+- *Transient SQL faults:* EF Core retries transient errors with a short budget. ADO.NET/Dapper connections retry opening with exponential backoff. The queue consumer backs off, up to 30s, while the database is down. Commands aren't retried blindly; the queue and idempotent inserts make repeats safe.
+- *Protected ingest:* a 1 MB request limit and a per-client token-bucket rate limit (429 + `Retry-After`) sit alongside queue-depth backpressure (503).
+- *Fail fast on bad config:* every API option has validated ranges, checked at startup, so a bad value stops the app with a clear message instead of crashing a background job later.
+- *Contained UI failures:* if the 3D view can't load (no WebGL, failed download), an error boundary offers the table instead of breaking the page.
+- *Containers:* the API has a built-in health probe (`--healthcheck`, since the runtime image has no curl), the simulator waits for a healthy API, logs rotate, and SQL Server's memory is capped.
+- *Proven by a chaos test:* `scripts/chaos-test.sh` stops the API, then SQL Server, for 30s each mid-stream, then checks that every sensor's readings across the whole window are gap-free. CI runs it on every push.
+
 **Ingestion is idempotent, so retries are safe.**
 - The simulator retries POSTs through Polly: exponential backoff with jitter, a circuit breaker and timeouts.
 - A retry, or a queue batch reprocessed after an ambiguous commit, can deliver readings the server already stored, so the readings table has a unique index on `(SensorId, Timestamp)` with `IGNORE_DUP_KEY = ON`. Duplicates are counted and dropped instead of failing the batch. Delivery is at-least-once, but each reading is stored once.
@@ -184,6 +193,7 @@ Data persists in the `sqldata` volume; `docker compose down -v` resets it. SQL S
 - **.NET:** build, then all tests against a SQL Server 2022 service container. The integration tests create and drop their own database there via `IOT_TEST_SQL`. Test results are uploaded as an artifact.
 - **Dashboard:** `npm ci`, lint, unit tests (Vitest) and production build.
 - **Compose smoke test:** builds all images and starts the stack, then checks that `/health` passes, that simulator readings reach storage through the queue, and that the dashboard serves the app and proxies the API.
+- **Chaos test:** takes the API and then SQL Server down mid-stream and verifies no readings were lost (`scripts/chaos-test.sh`).
 
 ## Running locally without Docker
 

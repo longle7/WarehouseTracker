@@ -10,6 +10,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="SensorSimulator.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\IoTDigitalTwin.Contracts\IoTDigitalTwin.Contracts.csproj" />
   </ItemGroup>
 

@@ -11,7 +11,7 @@ public sealed class DatabaseHealthCheck(SqlConnectionFactory connections) : IHea
     {
         try
         {
-            await using var connection = await connections.OpenAsync(cancellationToken);
+            await using var connection = await connections.OpenAsync(cancellationToken, retryOpen: false);
             await using var command = new SqlCommand("SELECT OBJECT_ID(N'ingest.ReadingBatches');", connection);
             return await command.ExecuteScalarAsync(cancellationToken) is DBNull or null
                 ? HealthCheckResult.Unhealthy("Database reachable but not migrated.")

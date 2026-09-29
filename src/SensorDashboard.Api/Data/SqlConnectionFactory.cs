@@ -8,12 +8,25 @@ namespace SensorDashboard.Api.Data;
 /// </summary>
 public sealed class SqlConnectionFactory(string connectionString)
 {
-    /// <summary>An unopened connection (Dapper opens and closes it as needed).</summary>
-    public SqlConnection Create() => new(connectionString);
+    // Opening a connection retries transient failures (failover, throttling, a restarting
+    // server) with exponential backoff. Commands are not retried here: writes are made safe
+    // to repeat by the ingest queue and idempotent inserts instead.
+    private static readonly SqlRetryLogicBaseProvider OpenRetry =
+        SqlConfigurableRetryFactory.CreateExponentialRetryProvider(new SqlRetryLogicOption
+        {
+            NumberOfTries = 4,
+            DeltaTime = TimeSpan.FromMilliseconds(500),
+            MaxTimeInterval = TimeSpan.FromSeconds(5),
+        });
 
-    public async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken)
+    /// <summary>An unopened connection (Dapper opens and closes it as needed).</summary>
+    /// <param name="retryOpen">False for probes like the health check, which should report an outage promptly.</param>
+    public SqlConnection Create(bool retryOpen = true) =>
+        new(connectionString) { RetryLogicProvider = retryOpen ? OpenRetry : null };
+
+    public async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken, bool retryOpen = true)
     {
-        var connection = Create();
+        var connection = Create(retryOpen);
         await connection.OpenAsync(cancellationToken);
         return connection;
     }

@@ -8,6 +8,7 @@ import { QueryState } from '../components/QueryState'
 import { Stat } from '../components/Stat'
 import { isOutOfRange } from '../components/status'
 import { StatusBadge } from '../components/StatusBadge'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import { UnitDetailPanel } from '../components/twin/UnitDetailPanel'
 
 // three.js is large; load it only when the 3D view is shown.
@@ -67,14 +68,26 @@ export function WarehousePage() {
                 {(scene) => (
                   <div className="twin-layout">
                     <section className="card twin-canvas" aria-label="3D view of the warehouse">
-                      <Suspense fallback={<div className="state">Loading 3D view…</div>}>
-                        <WarehouseTwin
-                          scene={scene}
-                          sensors={sensors}
-                          selectedId={selectedId}
-                          onSelect={(id) => update({ unit: id })}
-                        />
-                      </Suspense>
+                      <ErrorBoundary
+                        fallback={(error, retry) => (
+                          <div className="state">
+                            <p>The 3D view couldn't load ({error.message}). WebGL may be unavailable in this browser.</p>
+                            <button type="button" className="small-button" onClick={() => update({ view: 'table', unit: null })}>
+                              Show table
+                            </button>{' '}
+                            <button type="button" className="small-button" onClick={retry}>Retry</button>
+                          </div>
+                        )}
+                      >
+                        <Suspense fallback={<div className="state">Loading 3D view…</div>}>
+                          <WarehouseTwin
+                            scene={scene}
+                            sensors={sensors}
+                            selectedId={selectedId}
+                            onSelect={(id) => update({ unit: id })}
+                          />
+                        </Suspense>
+                      </ErrorBoundary>
                       <p className="twin-hint">Drag to orbit · scroll to zoom · click a fridge for details</p>
                     </section>
                     <UnitDetailPanel

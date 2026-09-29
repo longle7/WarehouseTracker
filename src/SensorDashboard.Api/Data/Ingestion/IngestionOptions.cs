@@ -32,4 +32,7 @@ public sealed class IngestionOptions
     /// immediately; polling covers batches enqueued by other instances and retries coming due.
     /// </summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>How long processed-batch results stay queryable via GET /ingest/batches/{id}.</summary>
+    public TimeSpan BatchResultRetention { get; set; } = TimeSpan.FromDays(7);
 }

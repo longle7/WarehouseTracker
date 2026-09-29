@@ -70,6 +70,85 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
         return row is null ? null : new QueuedBatch(row.Id, row.Attempts, row.Payload, AsUtc(row.EnqueuedAt));
     }
 
+    /// <summary>Records a processed batch's outcome inside the processing transaction.</summary>
+    public static Task RecordResultAsync(
+        SqlConnection connection, SqlTransaction transaction, QueuedBatch batch, IngestResultDto result, CancellationToken cancellationToken) =>
+        connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT ingest.BatchResults (BatchId, EnqueuedAt, Attempts, Received, Inserted, Duplicates, Rejected)
+            VALUES (@Id, @EnqueuedAt, @Attempts, @Received, @Inserted, @Duplicates, @Rejected);
+            """,
+            new
+            {
+                batch.Id,
+                EnqueuedAt = batch.EnqueuedAt.UtcDateTime,
+                Attempts = batch.Attempts + 1,
+                result.Received,
+                result.Inserted,
+                result.Duplicates,
+                result.Rejected,
+            },
+            transaction: transaction,
+            cancellationToken: cancellationToken));
+
+    /// <summary>
+    /// Where a batch is now: still queued or retrying, processed, or dead-lettered. A batch being
+    /// processed right now is row-locked, so this waits the few milliseconds until it commits
+    /// rather than reporting a misleading state.
+    /// </summary>
+    /// <returns>Null if the ID is unknown (or its result has aged out).</returns>
+    public async Task<IngestBatchStatusDto?> GetBatchStatusAsync(long id, CancellationToken cancellationToken)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        var row = await connection.QuerySingleOrDefaultAsync<BatchStatusRow>(new CommandDefinition(
+            """
+            SELECT 'processed' AS Status, Attempts, Received, Inserted, Duplicates, Rejected,
+                   CAST(NULL AS nvarchar(2000)) AS LastError, CAST(NULL AS datetime2(3)) AS NextAttemptAt, ProcessedAt AS CompletedAt
+            FROM ingest.BatchResults WHERE BatchId = @Id
+            UNION ALL
+            SELECT CASE WHEN Attempts = 0 THEN 'queued' ELSE 'retrying' END, Attempts, ReadingCount, NULL, NULL, NULL,
+                   LastError, AvailableAt, NULL
+            FROM ingest.ReadingBatches WHERE Id = @Id
+            UNION ALL
+            SELECT 'deadLettered', Attempts, ReadingCount, NULL, NULL, NULL, Error, NULL, DeadLetteredAt
+            FROM ingest.DeadLetters WHERE BatchId = @Id;
+            """,
+            new { Id = id },
+            cancellationToken: cancellationToken));
+
+        if (row is null) return null;
+
+        var status = row.Status switch
+        {
+            "processed" => IngestBatchStatus.Processed,
+            "queued" => IngestBatchStatus.Queued,
+            "retrying" => IngestBatchStatus.Retrying,
+            _ => IngestBatchStatus.DeadLettered,
+        };
+        var result = row.Inserted is { } inserted
+            ? new IngestResultDto(row.Received, inserted, row.Duplicates!.Value, row.Rejected!.Value)
+            : null;
+        return new IngestBatchStatusDto(
+            id,
+            status,
+            row.Attempts,
+            row.Received,
+            result,
+            row.LastError,
+            status == IngestBatchStatus.Retrying && row.NextAttemptAt is { } next ? AsUtc(next) : null,
+            row.CompletedAt is { } done ? AsUtc(done) : null);
+    }
+
+    /// <summary>Deletes processed-batch results past retention, a chunk at a time.</summary>
+    public async Task<int> TrimBatchResultsAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        return await connection.ExecuteAsync(new CommandDefinition(
+            "DELETE TOP (10000) FROM ingest.BatchResults WHERE ProcessedAt < @Cutoff;",
+            new { Cutoff = (timeProvider.GetUtcNow() - options.Value.BatchResultRetention).UtcDateTime },
+            cancellationToken: cancellationToken));
+    }
+
     public static IReadOnlyList<SensorReadingDto> Deserialize(QueuedBatch batch) =>
         JsonSerializer.Deserialize<List<SensorReadingDto>>(batch.Payload, Json)
         ?? throw new JsonException("Batch payload is null.");
@@ -175,6 +254,10 @@ public sealed class SqlReadingQueue(string connectionString, IOptions<IngestionO
     private static DateTimeOffset AsUtc(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Utc));
 
     private sealed record QueuedRow(long Id, int Attempts, string Payload, DateTime EnqueuedAt);
+
+    private sealed record BatchStatusRow(
+        string Status, int Attempts, int Received, int? Inserted, int? Duplicates, int? Rejected,
+        string? LastError, DateTime? NextAttemptAt, DateTime? CompletedAt);
 
     private sealed record DeadLetterRow(
         long Id, long BatchId, DateTime EnqueuedAt, DateTime DeadLetteredAt, int Attempts, int ReadingCount, string Error);

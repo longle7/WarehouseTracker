@@ -88,6 +88,27 @@ public class ApiEndpointTests(SqlServerFixture db) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Raw_history_carries_counts_and_the_metadata_clients_need_to_merge_pushes()
+    {
+        var now = Now();
+        await _client.PostAsJsonAsync("/ingest", new[] { Reading(SeaDairy, now.AddSeconds(-2)), Reading(SeaDairy, now) });
+
+        HttpResponseMessage response = null!;
+        List<SensorPropertyDto>? properties = null;
+        await PollAsync(async () =>
+        {
+            response = await _client.GetAsync($"/sensors/{SeaDairy}/properties?bucketSeconds=15");
+            properties = await response.Content.ReadFromJsonAsync<List<SensorPropertyDto>>(Json);
+            return properties!.Single(p => p.Name == "temperature").Values.Sum(v => v.Count);
+        }, total => total == 2);
+
+        Assert.Equal("15", response.Headers.GetValues("X-Bucket-Seconds").Single());
+        Assert.Equal("raw", response.Headers.GetValues("X-History-Source").Single());
+        Assert.Equal(now, DateTimeOffset.Parse(response.Headers.GetValues("X-Last-Reading-At").Single()));
+        Assert.All(properties!, p => Assert.Equal(2, p.Values.Sum(v => v.Count)));
+    }
+
+    [Fact]
     public async Task Scene_describes_every_unit_with_dimensions()
     {
         var scene = await _client.GetFromJsonAsync<WarehouseSceneDto>("/warehouses/WH-SEA/scene", Json);

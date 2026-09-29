@@ -49,14 +49,22 @@ public sealed class QueuedIngestProcessor(
     IOptions<IngestionOptions> options,
     ILogger<QueuedIngestProcessor> logger) : BackgroundService
 {
+    private static readonly TimeSpan TrimInterval = TimeSpan.FromHours(1);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var nextTrim = DateTime.UtcNow;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 // Drain everything that's due, then sleep until woken or the poll interval.
                 while (await ProcessNextAsync(stoppingToken)) { }
+                if (DateTime.UtcNow >= nextTrim)
+                {
+                    await queue.TrimBatchResultsAsync(stoppingToken);
+                    nextTrim = DateTime.UtcNow + TrimInterval;
+                }
                 await queue.WaitForWorkAsync(options.Value.PollInterval, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -91,6 +99,7 @@ public sealed class QueuedIngestProcessor(
         {
             readings = SqlReadingQueue.Deserialize(batch);
             result = await SqlReadingWriter.WriteAsync(connection, transaction, readings, cancellationToken);
+            await SqlReadingQueue.RecordResultAsync(connection, transaction, batch, result, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)

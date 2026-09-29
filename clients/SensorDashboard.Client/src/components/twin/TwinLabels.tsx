@@ -4,27 +4,41 @@ import { Vector3 } from 'three'
 import type { SceneUnit, Sensor } from '../../api/types'
 import { formatTemp } from '../format'
 import { STATUS } from '../status'
+import { type LabelBox, layoutLabels } from './labelLayout'
 import { STATUS_HEX } from './sceneTheme'
 
 export type LabelRefs = RefObject<Map<string, HTMLElement>>
 
 /**
- * Runs inside the Canvas: each frame, projects every unit's label anchor to screen space and
- * moves its DOM label directly (no React re-render). Labels behind the camera are hidden and
- * nearer ones stack on top.
+ * Runs inside the Canvas: each frame, projects every unit's label anchor to screen space,
+ * lays the labels out so they don't overlap (nearer ones keep their place), and moves the DOM
+ * labels directly (no React re-render). Labels behind the camera are hidden.
  */
 export function LabelTracker({ units, origin, labels }: { units: SceneUnit[]; origin: [number, number]; labels: LabelRefs }) {
   const point = useMemo(() => new Vector3(), [])
   useFrame(({ camera, size }) => {
+    const boxes: LabelBox[] = []
     for (const unit of units) {
       const el = labels.current.get(unit.sensorId)
       if (!el) continue
       point.set(origin[0] + unit.x, unit.height + 0.6, origin[1] + unit.z).project(camera)
-      const x = ((point.x + 1) / 2) * size.width
-      const y = ((1 - point.y) / 2) * size.height
-      el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`
-      el.style.visibility = point.z < 1 ? 'visible' : 'hidden'
-      el.style.zIndex = String(Math.round((1 - point.z) * 10_000))
+      const visible = point.z < 1
+      el.style.visibility = visible ? 'visible' : 'hidden'
+      if (!visible) continue
+      boxes.push({
+        id: unit.sensorId,
+        x: ((point.x + 1) / 2) * size.width,
+        y: ((1 - point.y) / 2) * size.height,
+        width: el.offsetWidth,
+        height: el.offsetHeight,
+        depth: point.z,
+      })
+    }
+
+    for (const [id, { left, top }] of layoutLabels(boxes)) {
+      const el = labels.current.get(id)!
+      el.style.transform = `translate(${left}px, ${top}px)`
+      el.style.zIndex = String(Math.round((1 - boxes.find((b) => b.id === id)!.depth) * 10_000))
     }
   })
   return null

@@ -54,4 +54,5 @@ public sealed record ReadingBucket(
     double MinHumidity,
     double MaxHumidity,
     double DoorOpenRatio,
-    int AnomalyCount);
+    int AnomalyCount,
+    DateTimeOffset? LastReadingAt);

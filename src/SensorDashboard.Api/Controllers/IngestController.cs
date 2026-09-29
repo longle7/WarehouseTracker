@@ -53,8 +53,18 @@ public sealed class IngestController(
         }
 
         var batchId = await queue.EnqueueAsync(readings, cancellationToken);
-        return Accepted(new IngestAcceptedDto(batchId, readings.Count));
+        // Location points at the batch's status, so producers can see what happened to it.
+        return AcceptedAtAction(nameof(Batch), new { id = batchId }, new IngestAcceptedDto(batchId, readings.Count));
     }
+
+    /// <summary>What happened to a queued batch: queued, retrying, processed (with counts) or dead-lettered.</summary>
+    [HttpGet("batches/{id:long}")]
+    [ProducesResponseType<IngestBatchStatusDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IngestBatchStatusDto>> Batch(long id, CancellationToken cancellationToken) =>
+        await queue.GetBatchStatusAsync(id, cancellationToken) is { } status
+            ? Ok(status)
+            : Problem(statusCode: StatusCodes.Status404NotFound, title: $"Batch {id} not found (unknown, replayed, or past retention).");
 
     /// <summary>Queue depth, backlog age, dead letters and processing counters.</summary>
     [HttpGet("stats")]

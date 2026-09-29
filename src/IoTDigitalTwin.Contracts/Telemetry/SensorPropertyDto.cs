@@ -12,4 +12,5 @@ public sealed record SensorPropertyDto(string Name, string Unit, IReadOnlyList<P
 /// readings with the door open; for anomalies, the count). Min and Max are set only for
 /// continuous measurements.
 /// </summary>
-public sealed record PropertyValueDto(DateTimeOffset Timestamp, double Value, double? Min = null, double? Max = null);
+/// <param name="Count">Readings in the bucket, so clients can fold new readings into the average exactly.</param>
+public sealed record PropertyValueDto(DateTimeOffset Timestamp, double Value, int Count, double? Min = null, double? Max = null);

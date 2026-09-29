@@ -20,11 +20,17 @@ public sealed record EscalateAlert(Alert Alert) : AlertAction;
 /// </summary>
 public static class AlertRules
 {
+    /// <param name="watchingSince">
+    /// When the evaluator started. A sensor that hasn't reported since then isn't known to be
+    /// deployed and live, so going quiet doesn't open a new offline alert (this avoids a flood
+    /// when the API starts before the producers). Already-active offline alerts continue.
+    /// </param>
     public static IReadOnlyList<AlertAction> Evaluate(
         Sensor sensor,
         ConditionStreaks conditions,
         IReadOnlyCollection<Alert> activeAlerts,
         DateTimeOffset now,
+        DateTimeOffset watchingSince,
         TimeSpan offlineAfter,
         AlertOptions options)
     {
@@ -40,8 +46,9 @@ public static class AlertRules
 
         var lastReading = conditions.LastReadingAt;
         var offline = lastReading is null || now - lastReading > offlineAfter;
+        var seenWhileWatching = lastReading >= watchingSince;
         Apply(AlertKind.SensorOffline,
-            condition: offline ? lastReading ?? now : null,
+            condition: offline && (seenWhileWatching || active.ContainsKey(AlertKind.SensorOffline)) ? lastReading ?? now : null,
             grace: TimeSpan.Zero, // offlineAfter already is the grace period
             // Offline resolves as soon as a fresh reading arrives.
             cleared: !offline,

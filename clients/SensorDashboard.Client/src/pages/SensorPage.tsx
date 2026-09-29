@@ -68,7 +68,7 @@ export function SensorPage() {
 
       {sensor && (
         <QueryState query={propertiesQuery}>
-          {(properties) => <SensorCharts sensor={sensor} properties={properties} />}
+          {(history) => <SensorCharts sensor={sensor} history={history} />}
         </QueryState>
       )}
     </main>

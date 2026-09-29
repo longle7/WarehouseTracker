@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Options;
 using SensorSimulator;
 using SensorSimulator.Configuration;
-using SensorSimulator.Generation;
 using SensorSimulator.Publishing;
 using SensorSimulator.Topology;
 
@@ -13,8 +12,12 @@ builder.Services.AddOptions<SimulatorOptions>()
 builder.Services.AddSingleton<IValidateOptions<SimulatorOptions>, SimulatorOptionsValidator>();
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IReadOnlyList<Warehouse>>(WarehouseTopology.Seed);
-builder.Services.AddSingleton<ReadingGenerator>();
+
+// Topology: the API is the source of truth; the built-in seed list is the offline fallback.
+builder.Services.AddSingleton<ITopologySource>(sp =>
+    sp.GetRequiredService<IOptions<SimulatorOptions>>().Value.TopologySource == TopologySourceKind.Seed
+        ? new SeedTopologySource()
+        : ActivatorUtilities.CreateInstance<ApiTopologySource>(sp));
 
 // Standard pipeline (Polly v8): rate limiter, total timeout, retry with exponential
 // backoff + jitter, circuit breaker, per-attempt timeout.

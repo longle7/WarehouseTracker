@@ -103,7 +103,7 @@ public sealed class DashboardService(
             state.Last is { } r ? new LastReadingDto(r.Timestamp, r.Temperature, r.Humidity, r.DoorOpen, r.IsAnomaly) : null);
 
     /// <returns>null if the sensor doesn't exist.</returns>
-    public async Task<IReadOnlyList<SensorPropertyDto>?> GetPropertiesAsync(
+    public async Task<SensorHistory?> GetPropertiesAsync(
         string sensorId, HistoryRange range, CancellationToken cancellationToken)
     {
         var exists = await db.Sensors.AnyAsync(s => s.Id == sensorId, cancellationToken);
@@ -114,13 +114,15 @@ public sealed class DashboardService(
 
         var buckets = await readings.GetHistoryAsync(sensorId, range.From, range.To, range.Bucket, cancellationToken);
 
-        return
+        IReadOnlyList<SensorPropertyDto> properties =
         [
-            new("temperature", "°F", buckets.Select(b => new PropertyValueDto(b.BucketStart, Math.Round(b.AvgTemperature, 2), b.MinTemperature, b.MaxTemperature)).ToList()),
-            new("humidity", "%", buckets.Select(b => new PropertyValueDto(b.BucketStart, Math.Round(b.AvgHumidity, 1), b.MinHumidity, b.MaxHumidity)).ToList()),
-            new("doorOpen", "ratio", buckets.Select(b => new PropertyValueDto(b.BucketStart, Math.Round(b.DoorOpenRatio, 3))).ToList()),
-            new("anomalies", "count", buckets.Select(b => new PropertyValueDto(b.BucketStart, b.AnomalyCount)).ToList()),
+            new("temperature", "°F", buckets.Select(b => new PropertyValueDto(b.BucketStart, Math.Round(b.AvgTemperature, 2), b.ReadingCount, b.MinTemperature, b.MaxTemperature)).ToList()),
+            new("humidity", "%", buckets.Select(b => new PropertyValueDto(b.BucketStart, Math.Round(b.AvgHumidity, 1), b.ReadingCount, b.MinHumidity, b.MaxHumidity)).ToList()),
+            new("doorOpen", "ratio", buckets.Select(b => new PropertyValueDto(b.BucketStart, Math.Round(b.DoorOpenRatio, 3), b.ReadingCount)).ToList()),
+            new("anomalies", "count", buckets.Select(b => new PropertyValueDto(b.BucketStart, b.AnomalyCount, b.ReadingCount)).ToList()),
         ];
+        var lastReadingAt = buckets.Count == 0 ? null : buckets.Max(b => b.LastReadingAt);
+        return new SensorHistory(properties, lastReadingAt);
     }
 
     public (HistoryRange? Range, string? Error) ResolveRange(DateTimeOffset? from, DateTimeOffset? to, int? bucketSeconds) =>
@@ -140,6 +142,9 @@ public sealed class DashboardService(
         });
     }
 }
+
+/// <param name="LastReadingAt">Newest reading included (raw-backed history only; null from rollups).</param>
+public sealed record SensorHistory(IReadOnlyList<SensorPropertyDto> Properties, DateTimeOffset? LastReadingAt);
 
 public sealed record DashboardSnapshot(
     IReadOnlyList<WarehouseDto> Warehouses,

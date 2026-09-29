@@ -31,11 +31,20 @@ public sealed class SensorsController(DashboardService dashboard) : ControllerBa
             return ValidationProblem(ModelState);
         }
 
-        // Which store served the history: "rollup" (1-minute aggregates) or "raw".
-        Response.Headers["X-History-Source"] = SqlReadingQueries.UsesRollups(range.Bucket) ? "rollup" : "raw";
+        if (await dashboard.GetPropertiesAsync(sensorId, range, cancellationToken) is not { } history)
+        {
+            return Problem(statusCode: StatusCodes.Status404NotFound, title: $"Sensor '{sensorId}' not found.");
+        }
 
-        return await dashboard.GetPropertiesAsync(sensorId, range, cancellationToken) is { } properties
-            ? Ok(properties)
-            : Problem(statusCode: StatusCodes.Status404NotFound, title: $"Sensor '{sensorId}' not found.");
+        // Metadata that lets clients fold pushed readings into this response exactly:
+        // the bucket size, which store served it ("raw" or "rollup"), and the newest reading
+        // it already includes (raw only), so a pushed reading is never counted twice.
+        Response.Headers["X-Bucket-Seconds"] = ((int)range.Bucket.TotalSeconds).ToString();
+        Response.Headers["X-History-Source"] = SqlReadingQueries.UsesRollups(range.Bucket) ? "rollup" : "raw";
+        if (history.LastReadingAt is { } last)
+        {
+            Response.Headers["X-Last-Reading-At"] = last.ToString("O");
+        }
+        return Ok(history.Properties);
     }
 }

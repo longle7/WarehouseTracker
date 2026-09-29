@@ -25,6 +25,8 @@ public sealed class AlertEvaluator(
     TimeProvider timeProvider,
     ILogger<AlertEvaluator> logger) : BackgroundService
 {
+    private readonly DateTimeOffset _watchingSince = timeProvider.GetUtcNow();
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(alertOptions.Value.EvaluationInterval, timeProvider);
@@ -68,6 +70,7 @@ public sealed class AlertEvaluator(
                 streaks.GetValueOrDefault(sensor.Id, ConditionStreaks.None),
                 active.Where(a => a.SensorId == sensor.Id).ToList(),
                 now,
+                _watchingSince,
                 dashboardOptions.Value.OfflineAfter,
                 options);
 

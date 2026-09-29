@@ -40,9 +40,17 @@ public sealed class SqlServerFixture : IAsyncLifetime
         await db.Database.EnsureDeletedAsync();
     }
 
-    /// <summary>Clears readings and rollups so a test starts from an empty telemetry store.</summary>
+    /// <summary>
+    /// Clears readings, rollups, the ingest queue and alerts so a test starts clean. The queue
+    /// matters: batches another test left behind would be processed by the next test's API
+    /// instance and could collide with its readings.
+    /// </summary>
     public Task ResetTelemetryAsync() => ExecuteAsync(
-        "TRUNCATE TABLE telemetry.SensorReadings; TRUNCATE TABLE telemetry.SensorReadings1m; TRUNCATE TABLE telemetry.RollupDirty;");
+        """
+        TRUNCATE TABLE telemetry.SensorReadings; TRUNCATE TABLE telemetry.SensorReadings1m; TRUNCATE TABLE telemetry.RollupDirty;
+        DELETE ingest.ReadingBatches; DELETE ingest.DeadLetters; DELETE ingest.BatchResults;
+        DELETE ops.Alerts;
+        """);
 
     public async Task ExecuteAsync(string sql)
     {

@@ -4,7 +4,8 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { BASE_URL } from './client'
 import { LiveContext, type LiveState, type LiveTopic } from './live'
 import { queryKeys } from './queries'
-import type { Sensor, Warehouse } from './types'
+import { mergeReadings } from './mergeReadings'
+import type { Sensor, SensorHistory, SensorReading, Warehouse } from './types'
 
 const HUB_URL = `${BASE_URL}/hubs/telemetry`
 const RETRY_DELAYS_MS = [0, 2_000, 5_000, 10_000, 30_000]
@@ -51,9 +52,16 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     connection.on('alertsChanged', () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.alertsAll })
     })
-    // History is bucketed server-side, so refetch it rather than appending raw readings.
-    connection.on('readingsIngested', (sensorId: string) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sensorPropertiesAll(sensorId) })
+    // Fold pushed readings into every cached history window for the sensor instead of
+    // refetching it. Rollup-backed windows can't merge exactly and are left to their
+    // periodic reconcile (see useSensorProperties).
+    connection.on('readingsIngested', (sensorId: string, readings: SensorReading[]) => {
+      const now = Date.now()
+      for (const [key, history] of queryClient.getQueriesData<SensorHistory>({ queryKey: queryKeys.sensorPropertiesAll(sensorId) })) {
+        const windowMinutes = key[3]
+        if (!history || typeof windowMinutes !== 'number') continue
+        queryClient.setQueryData(key, mergeReadings(history, readings, now - windowMinutes * 60_000))
+      }
     })
 
     const resubscribe = () => {

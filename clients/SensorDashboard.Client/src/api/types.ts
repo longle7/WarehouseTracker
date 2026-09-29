@@ -65,6 +65,8 @@ export interface PropertyValue {
   timestamp: string
   /** Bucket average; for doorOpen the fraction of readings with the door open; for anomalies a count. */
   value: number
+  /** Readings in the bucket. */
+  count: number
   min: number | null
   max: number | null
 }
@@ -73,6 +75,27 @@ export interface SensorProperty {
   name: SensorPropertyName
   unit: string
   values: PropertyValue[]
+}
+
+/** GET /sensors/{id}/properties plus the response headers needed to merge pushed readings. */
+export interface SensorHistory {
+  properties: SensorProperty[]
+  bucketSeconds: number
+  /** "raw" readings or 1-minute "rollup"s. */
+  source: 'raw' | 'rollup'
+  /** Newest reading already included (raw only). */
+  lastReadingAt: string | null
+}
+
+/** A reading as pushed by the ReadingsIngested hub event (SensorReadingDto). */
+export interface SensorReading {
+  sensorId: string
+  warehouseId: string
+  timestamp: string
+  temperature: number
+  humidity: number
+  doorOpen: boolean
+  isAnomaly: boolean
 }
 
 export type AlertKind = 'temperatureOutOfRange' | 'doorOpenTooLong' | 'sensorOffline'

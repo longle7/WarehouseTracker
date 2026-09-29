@@ -9,6 +9,8 @@ public class AlertRulesTests
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan OfflineAfter = TimeSpan.FromSeconds(20);
+    // The evaluator started watching an hour ago unless a test says otherwise.
+    private static readonly DateTimeOffset WatchingSince = Now.AddHours(-1);
     private static readonly AlertOptions Options = new()
     {
         TemperatureGracePeriod = TimeSpan.FromSeconds(30),
@@ -39,7 +41,7 @@ public class AlertRulesTests
     };
 
     private static IReadOnlyList<AlertAction> Evaluate(ConditionStreaks streaks, params Alert[] active) =>
-        AlertRules.Evaluate(Sensor(), streaks, active, Now, OfflineAfter, Options);
+        AlertRules.Evaluate(Sensor(), streaks, active, Now, WatchingSince, OfflineAfter, Options);
 
     [Fact]
     public void Healthy_sensor_raises_nothing() => Assert.Empty(Evaluate(Streaks()));
@@ -90,7 +92,7 @@ public class AlertRulesTests
     public void Going_offline_keeps_the_temperature_alert_open_and_adds_an_offline_alert()
     {
         var temperature = Active(AlertKind.TemperatureOutOfRange);
-        var stale = new ConditionStreaks(Now.AddSeconds(-60), Now.AddSeconds(-120), 41, 45, null);
+        var stale = new ConditionStreaks(Now.AddSeconds(-60), Now.AddSeconds(-120), 41, 45, null); // quiet for 60 s, watched for an hour
 
         var actions = Evaluate(stale, temperature);
 
@@ -100,12 +102,35 @@ public class AlertRulesTests
     }
 
     [Fact]
-    public void Silent_sensor_opens_offline_and_a_fresh_reading_resolves_it()
+    public void Sensor_that_goes_quiet_while_watched_opens_offline_and_a_fresh_reading_resolves_it()
     {
-        Assert.Contains(Evaluate(ConditionStreaks.None), a => a is OpenAlert { Kind: AlertKind.SensorOffline });
+        var wentQuiet = new ConditionStreaks(Now.AddSeconds(-30), null, null, null, null);
+        Assert.Contains(Evaluate(wentQuiet), a => a is OpenAlert { Kind: AlertKind.SensorOffline });
 
         var offline = Active(AlertKind.SensorOffline);
         Assert.IsType<CloseAlert>(Assert.Single(Evaluate(Streaks(), offline)));
+    }
+
+    [Fact]
+    public void Sensors_not_heard_from_since_startup_do_not_open_offline_alerts()
+    {
+        // API just started (watching for 5 s); the producers haven't connected yet.
+        var justStarted = Now.AddSeconds(-5);
+        var lastHeardBeforeRestart = new ConditionStreaks(Now.AddMinutes(-10), null, null, null, null);
+
+        Assert.Empty(AlertRules.Evaluate(Sensor(), ConditionStreaks.None, [], Now, justStarted, OfflineAfter, Options));
+        Assert.Empty(AlertRules.Evaluate(Sensor(), lastHeardBeforeRestart, [], Now, justStarted, OfflineAfter, Options));
+    }
+
+    [Fact]
+    public void Offline_alert_opened_before_a_restart_stays_active()
+    {
+        var justStarted = Now.AddSeconds(-5);
+        var offline = Active(AlertKind.SensorOffline, openedSecondsAgo: 600);
+        var silent = new ConditionStreaks(Now.AddMinutes(-10), null, null, null, null);
+
+        var action = Assert.Single(AlertRules.Evaluate(Sensor(), silent, [offline], Now, justStarted, OfflineAfter, Options));
+        Assert.IsType<UpdateAlert>(action);
     }
 
     [Fact]
@@ -134,7 +159,7 @@ public class AlertRulesTests
     {
         var alerts = new[] { Active(AlertKind.TemperatureOutOfRange), Active(AlertKind.SensorOffline) };
 
-        var actions = AlertRules.Evaluate(Sensor(active: false), ConditionStreaks.None, alerts, Now, OfflineAfter, Options);
+        var actions = AlertRules.Evaluate(Sensor(active: false), ConditionStreaks.None, alerts, Now, WatchingSince, OfflineAfter, Options);
 
         Assert.Equal(2, actions.Count);
         Assert.All(actions, a => Assert.IsType<CloseAlert>(a));

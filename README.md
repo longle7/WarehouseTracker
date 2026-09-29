@@ -1,5 +1,7 @@
 # IoT Digital Twin: Warehouse Cold-Chain Monitor
 
+[![CI](https://github.com/longle7/WarehouseTracker/actions/workflows/ci.yml/badge.svg)](https://github.com/longle7/WarehouseTracker/actions/workflows/ci.yml)
+
 A .NET 10 reimplementation of an AWS CDK "digital twin" architecture (API Gateway + Lambda + DynamoDB + Timestream). A simulator streams fridge telemetry from three warehouses. An ASP.NET Core API queues it durably, stores it (relational metadata split from time-series readings, with 1-minute rollups), raises debounced alerts, and pushes live status to a React dashboard with a clickable 3D twin of each warehouse.
 
 ```mermaid
@@ -104,13 +106,13 @@ The warehouse page opens on a 3D twin of the floor. Walk-in coolers, reach-in fr
 - *Exactly-once processing:* the consumer dequeues (`DELETE … OUTPUT` with `READPAST, UPDLOCK`) and inserts the readings **in one transaction**. A batch leaves the queue if and only if its readings are stored. Several consumers can run at once without blocking each other or taking the same batch.
 - *Retries and dead letters:* a failed batch rolls back, then is rescheduled with exponential backoff and jitter (`AvailableAt`). After `MaxAttempts` it moves to `ingest.DeadLetters`, or immediately if its payload is unreadable. `POST /ingest/dead-letters/{id}/replay` puts it back.
 - *Backpressure:* at `MaxQueueDepth` the endpoint returns **503 with `Retry-After`**, which the simulator's Polly pipeline already honors.
-- *Observability:* `GET /ingest/stats` shows queue depth, backlog age, dead letters and processing counters.
+- *Observability:* `GET /ingest/stats` shows queue depth, backlog age, dead letters and processing counters. Each batch's outcome is recorded in the same transaction as its readings, so `GET /ingest/batches/{id}` (the 202's `Location`) reports exactly what happened to it.
 - *Why not RabbitMQ or Service Bus:* no extra infrastructure, and the queue shares a transaction with the data it guards, which a separate broker can't. That's the transactional-outbox idea.
 - *Cost:* polling instead of push delivery (mitigated by an in-process wake-up on enqueue, with a 1s poll for other instances), and throughput is bounded by the database. `Ingestion:Mode = Direct` switches back to synchronous writes.
 
 **Alerts: a lifecycle, not just a status.**
 A sensor's *status* is instantaneous. An *alert* is stored history: `ops.Alerts` rows that open, can be acknowledged, escalate and resolve.
-- *Debounced:* an alert opens only after a condition lasts past its grace period (temperature out of range, door open: 30s each; offline: 20s). The evaluator finds when the current streak began with one set-based query over the readings, so it keeps no in-memory state and survives restarts.
+- *Debounced:* an alert opens only after a condition lasts past its grace period (temperature out of range, door open: 30s each; offline: 20s). An offline alert opens only for a sensor that has reported since the evaluator started watching. Otherwise, starting the API before the producers would flood the list with offline alerts. Alerts already open survive restarts. The evaluator finds when the current streak began with one set-based query over the readings, so it keeps no in-memory state and survives restarts.
 - *Lifecycle:* critical once any reading is 5°F outside the range, and severity only ratchets up. An unacknowledged critical alert escalates after 5 minutes. Temperature and door alerts resolve only on a good reading, so a sensor that goes offline mid-excursion keeps its alert.
 - *Safe with several instances:* a filtered unique index (`SensorId, Kind WHERE ClosedAt IS NULL`) allows only one active alert per sensor and condition.
 - *Notifications:* go through `IAlertNotificationSink` (logging today; email, Teams or SNS plug in there) and are pushed to dashboards as `AlertsChanged`.
@@ -120,6 +122,7 @@ A sensor's *status* is instantaneous. An *alert* is stored history: `ops.Alerts`
 `telemetry.SensorReadings1m` stores per-minute sums, counts, minimums and maximums, so minutes re-aggregate exactly into any larger bucket.
 - *Staying current:* the writer marks each minute it touches in `telemetry.RollupDirty`, in the same SQL batch as the insert. `RollupService` recomputes dirty minutes from raw data with a `MERGE` every 10s. Late or replayed readings simply dirty their minute again.
 - *Where it's used:* history requests whose bucket is a whole number of minutes (the 6h and 24h charts) read the rollups. Smaller buckets read raw rows. The `X-History-Source` header says which.
+- *Live charts without refetching:* history responses carry each bucket's reading `count`, plus `X-Bucket-Seconds` and `X-Last-Reading-At` headers. The dashboard folds pushed readings newer than that timestamp into its cached buckets, using the counts so averages stay exact, instead of refetching the whole history on every reading. A 30s refetch reconciles rounding and keeps rollup-backed windows fresh.
 - *Retention:* rollups are kept for 400 days, well past the 30-day raw retention.
 - *Cost:* rollup-backed charts lag by up to one refresh interval.
 
@@ -138,7 +141,7 @@ A sensor's *status* is instantaneous. An *alert* is stored history: `ops.Alerts`
 IoTDigitalTwin.slnx
 src/
   IoTDigitalTwin.Contracts/   DTOs shared by simulator and API (SensorReadingDto, WarehouseDto, ...)
-  SensorSimulator/            Worker Service: topology, reading generator + anomalies, HTTP publisher
+  SensorSimulator/            Worker Service: loads topology from the API, reading generator + anomalies, HTTP publisher
   SensorDashboard.Api/
     Controllers/              /ingest, /alerts, /warehouses, /sensors
     Data/                     EF Core metadata + migrations
@@ -155,7 +158,34 @@ clients/
   SensorDashboard.Client/     React + TypeScript (Vite): Leaflet map, 3D twin (react-three-fiber), Recharts, TanStack Query, SignalR
 ```
 
-## Running locally
+## Quick start with Docker
+
+```bash
+docker compose up --build
+```
+
+| | |
+|---|---|
+| Dashboard | http://localhost:8080 |
+| API | http://localhost:5278 (`/health`, `/ingest/stats`, `/alerts`, ...) |
+| SQL Server | `localhost,14333`, user `sa`, password `SA_PASSWORD` (dev default in `docker-compose.yml`) |
+
+What happens:
+1. `sqlserver` (SQL Server 2022 Developer) starts and waits until it reports healthy.
+2. `migrate` runs the EF Core migration bundle (schema, partitioning, queue, rollups, seed data) and exits.
+3. `api` starts only after migration succeeds. `simulator` loads its warehouses and sensors from the API, retrying until it's up, then starts streaming.
+4. `dashboard` (nginx) serves the built React app and proxies `/api`, including the SignalR WebSocket, to the API on the same origin.
+
+Data persists in the `sqldata` volume; `docker compose down -v` resets it. SQL Server is published on 14333 so it doesn't collide with a local instance on 1433.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request to `main`:
+- **.NET:** build, then all tests against a SQL Server 2022 service container. The integration tests create and drop their own database there via `IOT_TEST_SQL`. Test results are uploaded as an artifact.
+- **Dashboard:** `npm ci`, lint, unit tests (Vitest) and production build.
+- **Compose smoke test:** builds all images and starts the stack, then checks that `/health` passes, that simulator readings reach storage through the queue, and that the dashboard serves the app and proxies the API.
+
+## Running locally without Docker
 
 Prerequisites:
 - .NET 10 SDK
@@ -179,7 +209,8 @@ npm install
 npm run dev
 
 # Tests. Integration tests create and drop a throwaway database on localhost; set
-# IOT_TEST_SQL to a server connection string to use another SQL Server (e.g. in CI).
+# IOT_TEST_SQL to use another SQL Server, e.g. the compose one:
+#   IOT_TEST_SQL="Server=localhost,14333;User Id=sa;Password=DevOnly_Passw0rd!;TrustServerCertificate=True" dotnet test
 dotnet test
 ```
 
@@ -188,6 +219,7 @@ dotnet test
 | Endpoint | Purpose |
 |---|---|
 | `POST /ingest` | Batch of `SensorReadingDto` (1–1000). Queued mode: **202** `{ batchId, received }`, or **503** + `Retry-After` when the backlog is full. Direct mode: 200 `{ received, inserted, duplicates, rejected }`. |
+| `GET /ingest/batches/{id}` | One batch's fate (the 202's `Location`): `queued`, `retrying` (with next attempt and last error), `processed` (with inserted/duplicate/rejected counts), or `deadLettered`. |
 | `GET /ingest/stats` | Queue depth, oldest backlog age, dead-letter count, processing counters. |
 | `GET /ingest/dead-letters` · `POST /ingest/dead-letters/{id}/replay` | Inspect failed batches; put one back on the queue. |
 | `GET /alerts?state=active\|resolved\|all&warehouseId` | Alerts, most severe and newest first. |
@@ -210,6 +242,5 @@ The thresholds live in the `Dashboard` configuration section. Alert grace period
 
 - **Authentication:** device credentials for `/ingest`, user auth (and roles for acknowledging alerts) for the dashboard and hub.
 - **Real notification channels:** email, Teams or SMS behind `IAlertNotificationSink`.
-- **SignalR scale-out** (Azure SignalR Service), containerized deployment, and CI running the test suite against a SQL Server container.
+- **Cloud deployment and SignalR scale-out** (e.g. Azure Container Apps + Azure SQL + Azure SignalR Service).
 - **End-to-end browser tests** (Playwright) for the dashboard.
-- **Single topology source:** the simulator still has its own copy of the seed list; it should load warehouses and sensors from the API.

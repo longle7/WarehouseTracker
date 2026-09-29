@@ -5,7 +5,8 @@ public sealed record Warehouse(string Id, string Name, IReadOnlyList<Sensor> Sen
 public sealed record Sensor(string Id, string WarehouseId, string Location);
 
 /// <summary>
-/// In-memory seed of the simulated warehouses and their fridge sensors.
+/// Built-in seed of warehouses and fridge sensors: the offline fallback when
+/// Simulator:TopologySource is Seed. Normally the topology is loaded from the API.
 /// </summary>
 public static class WarehouseTopology
 {

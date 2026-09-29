@@ -1,4 +1,4 @@
-import type { Alert, AlertFilter, Sensor, SensorProperty, Warehouse, WarehouseScene } from './types'
+import type { Alert, AlertFilter, Sensor, SensorHistory, SensorProperty, Warehouse, WarehouseScene } from './types'
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
@@ -11,14 +11,18 @@ export class ApiError extends Error {
   }
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal, init?: RequestInit): Promise<T> {
+async function request(path: string, signal?: AbortSignal, init?: RequestInit): Promise<Response> {
   const response = await fetch(`${BASE_URL}${path}`, { signal, ...init, headers: { Accept: 'application/json', ...init?.headers } })
   if (!response.ok) {
     // ASP.NET Core returns ProblemDetails; surface its title when there is one.
     const problem = await response.json().catch(() => null)
     throw new ApiError(response.status, problem?.title ?? `Request failed (${response.status})`)
   }
-  return response.json() as Promise<T>
+  return response
+}
+
+async function getJson<T>(path: string, signal?: AbortSignal, init?: RequestInit): Promise<T> {
+  return (await request(path, signal, init)).json() as Promise<T>
 }
 
 export const api = {
@@ -43,9 +47,15 @@ export const api = {
       body: JSON.stringify({ by }),
     }),
 
-  sensorProperties: (sensorId: string, range: { from: Date; to?: Date }, signal?: AbortSignal) => {
+  sensorProperties: async (sensorId: string, range: { from: Date; to?: Date }, signal?: AbortSignal): Promise<SensorHistory> => {
     const params = new URLSearchParams({ from: range.from.toISOString() })
     if (range.to) params.set('to', range.to.toISOString())
-    return getJson<SensorProperty[]>(`/sensors/${encodeURIComponent(sensorId)}/properties?${params}`, signal)
+    const response = await request(`/sensors/${encodeURIComponent(sensorId)}/properties?${params}`, signal)
+    return {
+      properties: (await response.json()) as SensorProperty[],
+      bucketSeconds: Number(response.headers.get('X-Bucket-Seconds') ?? 0),
+      source: response.headers.get('X-History-Source') === 'rollup' ? 'rollup' : 'raw',
+      lastReadingAt: response.headers.get('X-Last-Reading-At'),
+    }
   },
 }

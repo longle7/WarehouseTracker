@@ -124,7 +124,7 @@ function UnitAlerts({ warehouseId, sensorId }: { warehouseId: string; sensorId: 
 function Sparkline({ sensor }: { sensor: Sensor }) {
   useLiveSubscription('sensor', sensor.id)
   const { data } = useSensorProperties(sensor.id, 15)
-  const points = (data?.find((p) => p.name === 'temperature')?.values ?? []).map((v) => ({
+  const points = (data?.properties.find((p) => p.name === 'temperature')?.values ?? []).map((v) => ({
     t: new Date(v.timestamp).getTime(),
     value: v.value,
   }))

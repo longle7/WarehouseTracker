@@ -8,6 +8,9 @@ import type { AlertFilter } from './types'
 // React Query pauses polling while the tab is hidden and dedupes shared requests.
 const FALLBACK_REFETCH_MS = 5_000
 const FALLBACK_HISTORY_REFETCH_MS = 10_000
+// While live, pushed readings are merged into history incrementally; a periodic refetch
+// reconciles server-side rounding and keeps rollup-backed windows (which don't merge) fresh.
+const LIVE_HISTORY_RECONCILE_MS = 30_000
 
 export const queryKeys = {
   warehouses: ['warehouses'] as const,
@@ -70,11 +73,12 @@ export function useWarehouseScene(warehouseId: string, enabled = true) {
 
 /** Rolling window ending now; the window start is recomputed on every fetch. */
 export function useSensorProperties(sensorId: string, windowMinutes: number) {
+  const live = useLiveState() === 'live'
   return useQuery({
     queryKey: queryKeys.sensorProperties(sensorId, windowMinutes),
     queryFn: ({ signal }) =>
       api.sensorProperties(sensorId, { from: new Date(Date.now() - windowMinutes * 60_000) }, signal),
-    refetchInterval: usePollingFallback(FALLBACK_HISTORY_REFETCH_MS),
+    refetchInterval: live ? LIVE_HISTORY_RECONCILE_MS : FALLBACK_HISTORY_REFETCH_MS,
     // Keep the old chart on screen while a new window loads instead of flashing a spinner.
     placeholderData: keepPreviousData,
   })

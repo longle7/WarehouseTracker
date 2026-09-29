@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using SensorSimulator.Topology;
 
 namespace SensorSimulator.Configuration;
 
@@ -6,7 +7,10 @@ public sealed class SimulatorOptions
 {
     public const string SectionName = "Simulator";
 
-    /// <summary>Base address of SensorDashboard.Api.</summary>
+    /// <summary>Where the warehouses and sensors come from; the API by default.</summary>
+    public TopologySourceKind TopologySource { get; set; } = TopologySourceKind.Api;
+
+    /// <summary>Base address of SensorDashboard.Api (ingestion and topology).</summary>
     public string IngestBaseUrl { get; set; } = "http://localhost:5278";
 
     public string IngestPath { get; set; } = "/ingest";

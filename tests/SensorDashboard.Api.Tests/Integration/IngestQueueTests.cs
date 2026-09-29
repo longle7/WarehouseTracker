@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using IoTDigitalTwin.Contracts.Telemetry;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -19,7 +21,7 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
     public async Task InitializeAsync()
     {
         await db.ResetTelemetryAsync();
-        await db.ExecuteAsync("DELETE ingest.ReadingBatches; DELETE ingest.DeadLetters;");
+        await db.ExecuteAsync("DELETE ingest.ReadingBatches; DELETE ingest.DeadLetters; DELETE ingest.BatchResults;");
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
@@ -70,6 +72,22 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
         }
 
         Assert.Equal(1, await db.ScalarAsync<int>("SELECT COUNT(*) FROM ingest.ReadingBatches"));
+    }
+
+    [Fact]
+    public async Task Freshly_enqueued_batches_are_immediately_due()
+    {
+        // Regression: a millisecond-precision AvailableAt rounded SYSUTCDATETIME() into the
+        // future about half the time, hiding brand-new batches from an immediate dequeue.
+        await using var connection = new SqlConnection(db.ConnectionString);
+        await connection.OpenAsync();
+        for (var i = 0; i < 200; i++)
+        {
+            var id = await _queue.EnqueueAsync([Reading(SeaDairy, Now())], default);
+            await using var command = new SqlCommand(
+                $"SELECT COUNT(*) FROM ingest.ReadingBatches WHERE Id = {id} AND AvailableAt <= SYSUTCDATETIME();", connection);
+            Assert.Equal(1, (int)(await command.ExecuteScalarAsync())!);
+        }
     }
 
     [Fact]
@@ -130,6 +148,63 @@ public class IngestQueueTests(SqlServerFixture db) : IAsyncLifetime
         var deadLetter = Assert.Single((await client.GetFromJsonAsync<List<DeadLetterDto>>("/ingest/dead-letters"))!);
         Assert.Equal(1, deadLetter.Attempts);
         Assert.Equal(0, await db.ScalarAsync<int>("SELECT COUNT(*) FROM ingest.ReadingBatches"));
+    }
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
+    [Fact]
+    public async Task Accepted_response_links_to_a_status_that_reports_the_outcome()
+    {
+        await using var factory = new ApiFactory(db.ConnectionString);
+        var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/ingest", new[]
+        {
+            Reading(SeaDairy, Now()),
+            Reading(SeaProduce, Now()),
+            Reading("WH-XXX-FRG-99", Now(), warehouseId: "WH-XXX"),
+        });
+        var accepted = await response.Content.ReadFromJsonAsync<IngestAcceptedDto>();
+
+        Assert.Equal($"/ingest/batches/{accepted!.BatchId}", response.Headers.Location!.AbsolutePath);
+        IngestBatchStatusDto? status = null;
+        await WaitUntilAsync(async () =>
+        {
+            status = await client.GetFromJsonAsync<IngestBatchStatusDto>(response.Headers.Location, Json);
+            return status!.Status == IngestBatchStatus.Processed;
+        });
+        Assert.Equal(new IngestResultDto(Received: 3, Inserted: 2, Duplicates: 0, Rejected: 1), status!.Result);
+        Assert.Equal(1, status.Attempts);
+        Assert.NotNull(status.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Status_reports_queued_retrying_and_dead_lettered_batches()
+    {
+        var queued = await _queue.EnqueueAsync([Reading(SeaDairy, Now())], default);
+        Assert.Equal(IngestBatchStatus.Queued, (await _queue.GetBatchStatusAsync(queued, default))!.Status);
+
+        await _queue.RecordFailureAsync(new QueuedBatch(queued, 0, "", default), "db timeout", poison: false, default);
+        var retrying = (await _queue.GetBatchStatusAsync(queued, default))!;
+        Assert.Equal((IngestBatchStatus.Retrying, 1, "db timeout"), (retrying.Status, retrying.Attempts, retrying.LastError));
+        Assert.True(retrying.NextAttemptAt > DateTimeOffset.UtcNow);
+
+        await _queue.RecordFailureAsync(new QueuedBatch(queued, 1, "", default), "bad payload", poison: true, default);
+        var dead = (await _queue.GetBatchStatusAsync(queued, default))!;
+        Assert.Equal((IngestBatchStatus.DeadLettered, "bad payload"), (dead.Status, dead.LastError));
+        Assert.Null(dead.Result);
+
+        Assert.Null(await _queue.GetBatchStatusAsync(987654321, default));
+    }
+
+    [Fact]
+    public async Task Unknown_batch_returns_404()
+    {
+        await using var factory = new ApiFactory(db.ConnectionString);
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync("/ingest/batches/987654321")).StatusCode);
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, int timeoutSeconds = 15)

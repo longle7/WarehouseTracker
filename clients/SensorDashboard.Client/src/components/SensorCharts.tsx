@@ -12,7 +12,7 @@ import {
   YAxis,
 } from 'recharts'
 import type { ReactNode } from 'react'
-import type { Sensor, SensorProperty, SensorPropertyName } from '../api/types'
+import type { Sensor, SensorHistory, SensorProperty, SensorPropertyName } from '../api/types'
 import { formatDateTime, formatPercent, formatTemp, formatTime } from './format'
 
 interface Row {
@@ -120,8 +120,8 @@ function AnomalyDot(props: { cx?: number; cy?: number; index?: number; payload?:
   )
 }
 
-export function SensorCharts({ sensor, properties }: { sensor: Sensor; properties: SensorProperty[] }) {
-  const rows = toRows(properties)
+export function SensorCharts({ sensor, history }: { sensor: Sensor; history: SensorHistory }) {
+  const rows = toRows(history.properties)
   if (rows.length === 0) return <div className="card state">No readings in this window.</div>
   const chartRows = withGaps(rows)
 

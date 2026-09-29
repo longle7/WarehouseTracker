@@ -67,7 +67,8 @@ public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
                MIN(r.Humidity)                   AS MinHumidity,
                MAX(r.Humidity)                   AS MaxHumidity,
                AVG(CAST(r.DoorOpen AS float))    AS DoorOpenRatio,
-               SUM(CAST(r.IsAnomaly AS int))     AS AnomalyCount
+               SUM(CAST(r.IsAnomaly AS int))     AS AnomalyCount,
+               MAX(r.[Timestamp])                AS LastReadingAt
         FROM telemetry.SensorReadings r
         CROSS APPLY (SELECT DATE_BUCKET(second, @BucketSeconds, r.[Timestamp]) AS BucketStart) b
         WHERE r.SensorId = @SensorId AND r.[Timestamp] >= @From AND r.[Timestamp] < @To
@@ -88,7 +89,9 @@ public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
                MIN(m.MinHumidity)                                         AS MinHumidity,
                MAX(m.MaxHumidity)                                         AS MaxHumidity,
                CAST(SUM(m.DoorOpenCount) AS float) / SUM(m.ReadingCount)  AS DoorOpenRatio,
-               SUM(m.AnomalyCount)                                        AS AnomalyCount
+               SUM(m.AnomalyCount)                                        AS AnomalyCount,
+               -- Rollups are per minute, so the exact last reading isn't known here.
+               CAST(NULL AS datetime2(3))                                 AS LastReadingAt
         FROM telemetry.SensorReadings1m m
         CROSS APPLY (SELECT DATE_BUCKET(second, @BucketSeconds, m.BucketStart) AS BucketStart) b
         WHERE m.SensorId = @SensorId
@@ -171,7 +174,8 @@ public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
             (double)r.MinHumidity,
             (double)r.MaxHumidity,
             r.DoorOpenRatio,
-            r.AnomalyCount)).ToList();
+            r.AnomalyCount,
+            r.LastReadingAt is { } last ? AsUtc(last) : null)).ToList();
     }
 
     // Timestamps are stored as UTC datetime2; Dapper hands them back with Kind = Unspecified.
@@ -193,5 +197,6 @@ public sealed class SqlReadingQueries(string connectionString) : IReadingQueries
         decimal MinHumidity,
         decimal MaxHumidity,
         double DoorOpenRatio,
-        int AnomalyCount);
+        int AnomalyCount,
+        DateTime? LastReadingAt);
 }

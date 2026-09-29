@@ -1,19 +1,17 @@
 using IoTDigitalTwin.Contracts.Metadata;
 using IoTDigitalTwin.Contracts.Telemetry;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using SensorDashboard.Api.Data;
 using SensorDashboard.Api.Data.Metadata;
 using SensorDashboard.Api.Data.Telemetry;
 
 namespace SensorDashboard.Api.Services;
 
 /// <summary>
-/// Read side for the dashboard: joins metadata (EF Core) with telemetry (IReadingQueries)
-/// in memory, the way a Lambda would combine DynamoDB and Timestream results.
+/// Read side for the dashboard: joins metadata (cached from EF Core) with telemetry
+/// (IReadingQueries) in memory, the way a Lambda would combine DynamoDB and Timestream results.
 /// </summary>
 public sealed class DashboardService(
-    DigitalTwinDbContext db,
+    MetadataCache metadata,
     IReadingQueries readings,
     IOptions<DashboardOptions> options,
     TimeProvider timeProvider)
@@ -26,11 +24,7 @@ public sealed class DashboardService(
     /// <returns>null if the warehouse doesn't exist.</returns>
     public async Task<IReadOnlyList<SensorDto>?> GetSensorsAsync(string warehouseId, CancellationToken cancellationToken)
     {
-        var warehouse = await db.Warehouses
-            .AsNoTracking()
-            .Include(w => w.Sensors.OrderBy(s => s.Id))
-            .SingleOrDefaultAsync(w => w.Id == warehouseId, cancellationToken);
-        if (warehouse is null)
+        if (await metadata.FindWarehouseAsync(warehouseId, cancellationToken) is not { } warehouse)
         {
             return null;
         }
@@ -42,10 +36,7 @@ public sealed class DashboardService(
     /// <summary>Static 3D layout for a warehouse; null if it doesn't exist.</summary>
     public async Task<WarehouseSceneDto?> GetSceneAsync(string warehouseId, CancellationToken cancellationToken)
     {
-        var warehouse = await db.Warehouses
-            .AsNoTracking()
-            .Include(w => w.Sensors.OrderBy(s => s.Id))
-            .SingleOrDefaultAsync(w => w.Id == warehouseId, cancellationToken);
+        var warehouse = await metadata.FindWarehouseAsync(warehouseId, cancellationToken);
 
         return warehouse is null
             ? null
@@ -67,11 +58,7 @@ public sealed class DashboardService(
     /// </summary>
     public async Task<DashboardSnapshot> GetSnapshotAsync(CancellationToken cancellationToken)
     {
-        var warehouses = await db.Warehouses
-            .AsNoTracking()
-            .Include(w => w.Sensors.OrderBy(s => s.Id))
-            .OrderBy(w => w.Name)
-            .ToListAsync(cancellationToken);
+        var warehouses = await metadata.GetWarehousesAsync(cancellationToken);
 
         var statuses = await GetStatusesAsync(warehouses.SelectMany(w => w.Sensors).ToList(), cancellationToken);
 
@@ -106,8 +93,7 @@ public sealed class DashboardService(
     public async Task<SensorHistory?> GetPropertiesAsync(
         string sensorId, HistoryRange range, CancellationToken cancellationToken)
     {
-        var exists = await db.Sensors.AnyAsync(s => s.Id == sensorId, cancellationToken);
-        if (!exists)
+        if (!await metadata.SensorExistsAsync(sensorId, cancellationToken))
         {
             return null;
         }

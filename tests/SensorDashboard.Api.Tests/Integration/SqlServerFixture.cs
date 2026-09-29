@@ -56,8 +56,8 @@ public sealed class SqlServerFixture : IAsyncLifetime
     public Task ResetTelemetryAsync() => ExecuteAsync(
         """
         TRUNCATE TABLE telemetry.SensorReadings; TRUNCATE TABLE telemetry.SensorReadings1m; TRUNCATE TABLE telemetry.RollupDirty;
-        DELETE ingest.ReadingBatches; DELETE ingest.DeadLetters; DELETE ingest.BatchResults;
-        DELETE ops.Alerts;
+        DELETE ingest.ReadingBatches; DELETE ingest.DeadLetters; DELETE ingest.BatchResults; DELETE ingest.IdempotencyKeys;
+        DELETE ops.Alerts; DELETE ops.HealthSamples;
         """);
 
     public async Task ExecuteAsync(string sql)

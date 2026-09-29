@@ -8,5 +8,6 @@ namespace SensorSimulator.Publishing;
 /// </summary>
 public interface IReadingPublisher
 {
-    Task PublishAsync(IReadOnlyList<SensorReadingDto> readings, CancellationToken cancellationToken);
+    /// <param name="idempotencyKey">Identifies the batch; every resend of it carries the same key.</param>
+    Task PublishAsync(IReadOnlyList<SensorReadingDto> readings, string idempotencyKey, CancellationToken cancellationToken);
 }

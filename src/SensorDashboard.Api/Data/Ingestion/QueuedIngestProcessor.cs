@@ -12,8 +12,21 @@ public sealed class IngestMetrics
 {
     private long _batches, _inserted, _duplicates, _rejected, _failed, _deadLettered;
 
+    private long _lastStoredTicks;
+
+    /// <summary>When readings were last stored (not just received); null since startup.</summary>
+    public DateTimeOffset? LastReadingsStoredAt
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastStoredTicks);
+            return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
+    }
+
     public void Processed(IngestResultDto result)
     {
+        if (result.Inserted > 0) Interlocked.Exchange(ref _lastStoredTicks, DateTimeOffset.UtcNow.UtcTicks);
         Interlocked.Increment(ref _batches);
         Interlocked.Add(ref _inserted, result.Inserted);
         Interlocked.Add(ref _duplicates, result.Duplicates);
@@ -64,7 +77,7 @@ public sealed class QueuedIngestProcessor(
                 while (await ProcessNextAsync(stoppingToken)) { }
                 if (DateTime.UtcNow >= nextTrim)
                 {
-                    await queue.TrimBatchResultsAsync(stoppingToken);
+                    await queue.TrimHistoryAsync(stoppingToken);
                     nextTrim = DateTime.UtcNow + TrimInterval;
                 }
                 if (consecutiveFailures > 0)

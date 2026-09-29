@@ -1,7 +1,10 @@
 using IoTDigitalTwin.Contracts.Alerts;
 using IoTDigitalTwin.Contracts.Metadata;
 using IoTDigitalTwin.Contracts.Telemetry;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
+using SensorDashboard.Api.Services;
 
 namespace SensorDashboard.Api.Realtime;
 
@@ -27,24 +30,24 @@ public interface ITelemetryClient
 /// <summary>
 /// Live dashboard updates (the API Gateway WebSocket route of the AWS design). Clients join
 /// groups for the warehouse and sensor they are viewing; the overview goes to everyone.
+/// Subscriptions are idempotent, validated and capped per connection.
 /// </summary>
-public sealed class TelemetryHub(LiveConnectionTracker tracker) : Hub<ITelemetryClient>
+public sealed partial class TelemetryHub(
+    LiveConnectionTracker tracker,
+    SubscriptionRegistry subscriptions,
+    IOptions<ApiLimitsOptions> limits) : Hub<ITelemetryClient>
 {
     public static string WarehouseGroup(string warehouseId) => $"warehouse:{warehouseId}";
 
     public static string SensorGroup(string sensorId) => $"sensor:{sensorId}";
 
-    public Task SubscribeWarehouse(string warehouseId) =>
-        Groups.AddToGroupAsync(Context.ConnectionId, WarehouseGroup(warehouseId));
+    public Task<SubscribeOutcome> SubscribeWarehouse(string warehouseId) => SubscribeAsync(WarehouseGroup(Validate(warehouseId)));
 
-    public Task UnsubscribeWarehouse(string warehouseId) =>
-        Groups.RemoveFromGroupAsync(Context.ConnectionId, WarehouseGroup(warehouseId));
+    public Task UnsubscribeWarehouse(string warehouseId) => UnsubscribeAsync(WarehouseGroup(Validate(warehouseId)));
 
-    public Task SubscribeSensor(string sensorId) =>
-        Groups.AddToGroupAsync(Context.ConnectionId, SensorGroup(sensorId));
+    public Task<SubscribeOutcome> SubscribeSensor(string sensorId) => SubscribeAsync(SensorGroup(Validate(sensorId)));
 
-    public Task UnsubscribeSensor(string sensorId) =>
-        Groups.RemoveFromGroupAsync(Context.ConnectionId, SensorGroup(sensorId));
+    public Task UnsubscribeSensor(string sensorId) => UnsubscribeAsync(SensorGroup(Validate(sensorId)));
 
     public override Task OnConnectedAsync()
     {
@@ -55,8 +58,38 @@ public sealed class TelemetryHub(LiveConnectionTracker tracker) : Hub<ITelemetry
     public override Task OnDisconnectedAsync(Exception? exception)
     {
         tracker.Disconnected();
+        subscriptions.RemoveConnection(Context.ConnectionId); // SignalR drops the group memberships itself
         return base.OnDisconnectedAsync(exception);
     }
+
+    private async Task<SubscribeOutcome> SubscribeAsync(string group)
+    {
+        var outcome = subscriptions.TryAdd(Context.ConnectionId, group, limits.Value.MaxSubscriptionsPerConnection);
+        switch (outcome)
+        {
+            case SubscribeOutcome.LimitReached:
+                throw new HubException($"Subscription limit of {limits.Value.MaxSubscriptionsPerConnection} reached; unsubscribe first.");
+            case SubscribeOutcome.Added:
+                await Groups.AddToGroupAsync(Context.ConnectionId, group);
+                break;
+        }
+        return outcome;
+    }
+
+    private async Task UnsubscribeAsync(string group)
+    {
+        if (subscriptions.Remove(Context.ConnectionId, group))
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, group);
+        }
+    }
+
+    // IDs are short slugs like WH-SEA or WH-SEA-FRG-01; anything else can't match a group.
+    private static string Validate(string id) =>
+        id is not null && IdPattern().IsMatch(id) ? id : throw new HubException("Invalid warehouse or sensor ID.");
+
+    [GeneratedRegex("^[A-Za-z0-9-]{1,32}$")]
+    private static partial Regex IdPattern();
 }
 
 /// <summary>Lets the broadcaster skip building snapshots when no dashboard is connected.</summary>

@@ -15,7 +15,7 @@ public sealed class DatabaseHealthCheck(SqlConnectionFactory connections) : IHea
             await using var command = new SqlCommand("SELECT OBJECT_ID(N'ingest.ReadingBatches');", connection);
             return await command.ExecuteScalarAsync(cancellationToken) is DBNull or null
                 ? HealthCheckResult.Unhealthy("Database reachable but not migrated.")
-                : HealthCheckResult.Healthy();
+                : HealthCheckResult.Healthy("Reachable and migrated.");
         }
         catch (Exception ex)
         {

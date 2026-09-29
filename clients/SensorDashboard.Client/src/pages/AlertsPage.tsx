@@ -4,7 +4,9 @@ import type { AlertFilter } from '../api/types'
 import { AcknowledgeButton, SeverityBadge, StateLabel } from '../components/alerts'
 import { ALERT_KIND_LABEL, formatDuration, useAcknowledgeAs } from '../components/alertUtils'
 import { formatAgo, formatDateTime, formatTemp } from '../components/format'
+import { EmptyState } from '../components/EmptyState'
 import { QueryState } from '../components/QueryState'
+import { SkeletonList } from '../components/Skeleton'
 
 const FILTERS: { value: AlertFilter; label: string }[] = [
   { value: 'active', label: 'Active' },
@@ -47,11 +49,20 @@ export function AlertsPage() {
         <input type="text" value={by} placeholder="Your name" maxLength={100} onChange={(e) => setBy(e.target.value)} />
       </label>
 
-      <QueryState query={query}>
-        {(alerts) =>
-          alerts.length === 0 ? (
-            <div className="card state">{filter === 'active' ? 'No active alerts. All clear.' : 'No alerts.'}</div>
+      <QueryState
+        query={query}
+        loading={<SkeletonList rows={5} rowHeight={48} />}
+        isEmpty={(alerts) => alerts.length === 0}
+        empty={
+          filter === 'active' ? (
+            <EmptyState icon="✓" title="All clear">No active alerts. New ones appear here as soon as a condition outlasts its grace period.</EmptyState>
           ) : (
+            <EmptyState title="No alerts">Nothing has been raised in this view yet.</EmptyState>
+          )
+        }
+      >
+        {(alerts) =>
+          (
             <section className="card">
               <div className="table-wrap">
                 <table>

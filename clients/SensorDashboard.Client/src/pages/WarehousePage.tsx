@@ -4,7 +4,9 @@ import { useLiveSubscription } from '../api/live'
 import { useSensors, useWarehouse, useWarehouseScene } from '../api/queries'
 import type { Sensor } from '../api/types'
 import { formatAgo, formatDoor, formatPercent, formatTemp } from '../components/format'
+import { EmptyState } from '../components/EmptyState'
 import { QueryState } from '../components/QueryState'
+import { SkeletonPanel, SkeletonStats } from '../components/Skeleton'
 import { Stat } from '../components/Stat'
 import { isOutOfRange } from '../components/status'
 import { StatusBadge } from '../components/StatusBadge'
@@ -57,14 +59,19 @@ export function WarehousePage() {
         </div>
       </div>
 
-      <QueryState query={sensorsQuery}>
+      <QueryState
+        query={sensorsQuery}
+        loading={<><SkeletonStats /><SkeletonPanel height={view === '3d' ? 520 : 220} /></>}
+        isEmpty={(sensors) => sensors.length === 0}
+        empty={<EmptyState icon="❄" title="No sensors in this warehouse">Add sensors in the metadata to start monitoring.</EmptyState>}
+      >
         {(sensors) => (
           <>
             <SensorStats sensors={sensors} />
             {view === 'table' ? (
               <SensorTable warehouseId={warehouseId} sensors={sensors} />
             ) : (
-              <QueryState query={sceneQuery}>
+              <QueryState query={sceneQuery} loading={<SkeletonPanel height={520} />}>
                 {(scene) => (
                   <div className="twin-layout">
                     <section className="card twin-canvas" aria-label="3D view of the warehouse">

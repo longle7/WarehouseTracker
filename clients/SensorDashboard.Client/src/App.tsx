@@ -1,5 +1,7 @@
+import { reportError } from './api/errorReporting'
 import { useLiveState } from './api/live'
 import { useAlerts } from './api/queries'
+import { useEffect } from 'react'
 import { createBrowserRouter, isRouteErrorResponse, Link, NavLink, Outlet, RouterProvider, useRouteError } from 'react-router'
 
 const LIVE_LABEL = {
@@ -20,6 +22,7 @@ function Layout() {
         <Link to="/" className="brand">Sensor Dashboard</Link>
         <nav className="app-nav">
           <NavLink to="/" end>Warehouses</NavLink>
+          <NavLink to="/status">Status</NavLink>
           <NavLink to="/alerts">
             Alerts
             {activeAlerts.length > 0 && (
@@ -42,6 +45,9 @@ function Layout() {
 function RouteError() {
   const error = useRouteError()
   const message = isRouteErrorResponse(error) ? `${error.status} ${error.statusText}` : 'Something went wrong.'
+  useEffect(() => {
+    if (!isRouteErrorResponse(error)) reportError(error, 'RouteError')
+  }, [error])
   return (
     <main className="page">
       <div className="state error">{message}</div>
@@ -57,6 +63,7 @@ const router = createBrowserRouter([
     children: [
       // Route-level code splitting: Leaflet and Recharts load only on the pages that use them.
       { path: '/', lazy: async () => ({ Component: (await import('./pages/WarehousesPage')).WarehousesPage }) },
+      { path: '/status', lazy: async () => ({ Component: (await import('./pages/StatusPage')).StatusPage }) },
       { path: '/alerts', lazy: async () => ({ Component: (await import('./pages/AlertsPage')).AlertsPage }) },
       { path: '/warehouses/:warehouseId', lazy: async () => ({ Component: (await import('./pages/WarehousePage')).WarehousePage }) },
       {

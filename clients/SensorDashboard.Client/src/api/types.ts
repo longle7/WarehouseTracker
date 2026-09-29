@@ -122,3 +122,30 @@ export interface Alert {
   peakTemperature: number | null
   message: string
 }
+
+export type HealthState = 'healthy' | 'degraded' | 'unhealthy'
+
+export interface HealthCheckResult {
+  name: string
+  status: HealthState
+  description: string | null
+  durationMs: number
+}
+
+export interface Incident {
+  startedAt: string
+  endedAt: string | null
+  status: HealthState
+  summary: string
+}
+
+/** GET /status: live health checks plus uptime history from the API's health sampler. */
+export interface SystemStatus {
+  status: HealthState
+  checkedAt: string
+  /** Share of samples that were healthy or degraded (i.e. up), 0-100; null before any samples. */
+  uptime24h: number | null
+  uptime7d: number | null
+  checks: HealthCheckResult[]
+  incidents: Incident[]
+}

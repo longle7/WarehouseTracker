@@ -1,17 +1,23 @@
 using IoTDigitalTwin.Contracts.Alerts;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.OutputCaching;
 using Microsoft.AspNetCore.SignalR;
 using SensorDashboard.Api.Data.Alerts;
 using SensorDashboard.Api.Realtime;
+using SensorDashboard.Api.Services;
 
 namespace SensorDashboard.Api.Controllers;
 
 [ApiController]
 [Route("alerts")]
-public sealed class AlertsController(AlertService alerts, IHubContext<TelemetryHub, ITelemetryClient> hub) : ControllerBase
+public sealed class AlertsController(
+    AlertService alerts,
+    IHubContext<TelemetryHub, ITelemetryClient> hub,
+    IOutputCacheStore outputCache) : ControllerBase
 {
     /// <summary>Alerts, active (open or acknowledged) by default; most severe and newest first.</summary>
     [HttpGet]
+    [OutputCache(PolicyName = ResponseCaching.Alerts)]
     public Task<IReadOnlyList<AlertDto>> List(
         [FromQuery] AlertFilter state = AlertFilter.Active,
         [FromQuery] string? warehouseId = null,
@@ -35,6 +41,8 @@ public sealed class AlertsController(AlertService alerts, IHubContext<TelemetryH
             case AcknowledgeOutcome.AlreadyResolved:
                 return Problem(statusCode: StatusCodes.Status409Conflict, title: $"Alert {id} is already resolved.");
             case AcknowledgeOutcome.Acknowledged:
+                // Cached alert lists are now stale; drop them before telling dashboards to refetch.
+                await outputCache.EvictByTagAsync(ResponseCaching.AlertsTag, cancellationToken);
                 await hub.Clients.All.AlertsChanged([alert!]);
                 break;
         }

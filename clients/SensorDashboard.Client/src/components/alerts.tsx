@@ -1,3 +1,4 @@
+import { describeError } from '../api/errorMessages'
 import { useAcknowledgeAlert } from '../api/queries'
 import type { Alert, AlertSeverity, AlertState } from '../api/types'
 
@@ -38,16 +39,20 @@ export function AcknowledgeButton({ alert, by }: { alert: Alert; by: string }) {
   const acknowledge = useAcknowledgeAlert()
   if (alert.state !== 'open') return null
   return (
-    <button
-      type="button"
-      className="small-button"
-      disabled={acknowledge.isPending}
-      onClick={(e) => {
-        e.stopPropagation()
-        acknowledge.mutate({ id: alert.id, by: by.trim() || 'operator' })
-      }}
-    >
-      {acknowledge.isPending ? 'Acknowledging…' : 'Acknowledge'}
-    </button>
+    <span className="ack-action">
+      <button
+        type="button"
+        className="small-button"
+        // Disabled while in flight so a double click can't send two requests.
+        disabled={acknowledge.isPending}
+        onClick={(e) => {
+          e.stopPropagation()
+          acknowledge.mutate({ id: alert.id, by: by.trim() || 'operator' })
+        }}
+      >
+        {acknowledge.isPending ? 'Acknowledging…' : acknowledge.isError ? 'Retry' : 'Acknowledge'}
+      </button>
+      {acknowledge.isError && <span className="inline-error" role="alert">{describeError(acknowledge.error).title}</span>}
+    </span>
   )
 }

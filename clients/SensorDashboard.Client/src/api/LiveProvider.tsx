@@ -27,7 +27,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const invoke = useCallback((action: 'Subscribe' | 'Unsubscribe', topic: LiveTopic, id: string) => {
     const connection = connectionRef.current
     if (connection?.state !== HubConnectionState.Connected) return // re-sent on (re)connect
-    connection.invoke(hubMethod(action, topic), id).catch(() => {})
+    // The hub refuses invalid IDs and over-limit subscriptions; that's a bug worth seeing, not a crash.
+    connection.invoke(hubMethod(action, topic), id).catch((error: unknown) => console.warn(`${action} ${topic} ${id} failed`, error))
   }, [])
 
   useEffect(() => {

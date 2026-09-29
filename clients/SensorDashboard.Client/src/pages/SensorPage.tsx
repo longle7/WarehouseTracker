@@ -4,6 +4,7 @@ import { useLiveSubscription } from '../api/live'
 import { useSensorProperties, useSensors, useWarehouse } from '../api/queries'
 import { formatAgo, formatDoor, formatPercent, formatTemp } from '../components/format'
 import { QueryState } from '../components/QueryState'
+import { SkeletonPanel } from '../components/Skeleton'
 import { SensorCharts } from '../components/SensorCharts'
 import { StatusBadge } from '../components/StatusBadge'
 import { Stat } from '../components/Stat'
@@ -67,7 +68,7 @@ export function SensorPage() {
       </div>
 
       {sensor && (
-        <QueryState query={propertiesQuery}>
+        <QueryState query={propertiesQuery} loading={<><SkeletonPanel /><SkeletonPanel height={180} /></>}>
           {(history) => <SensorCharts sensor={sensor} history={history} />}
         </QueryState>
       )}
